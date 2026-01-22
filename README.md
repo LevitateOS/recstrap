@@ -1,36 +1,41 @@
 # recstrap
 
-LevitateOS installer. Installs the system from the live ISO to disk, similar to `archinstall` for Arch Linux.
+LevitateOS system extractor. Like `pacstrap` for Arch Linux - extracts the base system to a target directory.
+
+**You do everything else manually.** Partitioning, formatting, mounting, fstab, bootloader, passwords - just like a real Arch install.
 
 ## Usage
 
 ```bash
-recstrap /dev/vda
-```
+# User does manual setup first (like Arch)
+fdisk /dev/vda                    # Partition the disk
+mkfs.fat -F32 /dev/vda1           # Format EFI partition
+mkfs.ext4 /dev/vda2               # Format root partition
+mount /dev/vda2 /mnt              # Mount root
+mkdir -p /mnt/boot
+mount /dev/vda1 /mnt/boot         # Mount boot
 
-This will:
-1. Partition the disk (GPT: 512MB EFI + rest as root)
-2. Format partitions (FAT32 for EFI, ext4 for root)
-3. Mount partitions
-4. Extract squashfs to disk
-5. Generate `/etc/fstab`
-6. Install systemd-boot bootloader
-7. Prompt for root password
-8. Unmount and done
+# Then extract the system
+recstrap /mnt
+
+# User does post-install manually
+genfstab -U /mnt >> /mnt/etc/fstab
+arch-chroot /mnt                  # (or: chroot /mnt /bin/bash)
+passwd                            # Set root password
+bootctl install                   # Install bootloader
+# ... configure as needed
+```
 
 ## Options
 
 ```
 USAGE:
-    recstrap [OPTIONS] <DISK>
+    recstrap [OPTIONS] <TARGET>
 
 ARGS:
-    <DISK>    Target disk (e.g., /dev/vda, /dev/sda, /dev/nvme0n1)
+    <TARGET>    Target directory (e.g., /mnt)
 
 OPTIONS:
-    --efi-size <SIZE>    EFI partition size [default: 512M]
-    --no-format          Skip partitioning and formatting (use existing partitions)
-    --no-bootloader      Skip bootloader installation
     --squashfs <PATH>    Squashfs location [default: /media/cdrom/live/filesystem.squashfs]
     -h, --help           Print help
 ```
@@ -38,48 +43,40 @@ OPTIONS:
 ## Examples
 
 ```bash
-# Standard installation
-recstrap /dev/sda
-
-# NVMe drive
-recstrap /dev/nvme0n1
-
-# Use existing partitions (manual partitioning)
-recstrap --no-format /dev/vda
+# Standard extraction to /mnt
+recstrap /mnt
 
 # Custom squashfs location
-recstrap --squashfs /mnt/custom/filesystem.squashfs /dev/vda
-
-# Larger EFI partition
-recstrap --efi-size 1G /dev/vda
+recstrap --squashfs /path/to/filesystem.squashfs /mnt
 ```
+
+## What recstrap does
+
+- Extracts the squashfs image to the target directory
+
+## What recstrap does NOT do
+
+- Partitioning (you run fdisk/parted)
+- Formatting (you run mkfs)
+- Mounting (you run mount)
+- fstab generation (you run genfstab)
+- Bootloader installation (you run bootctl)
+- Password setting (you run passwd)
+- User creation (you run useradd)
+
+This is intentional. LevitateOS is for users who want control, like Arch.
 
 ## Requirements
 
 - Must be run from the LevitateOS live ISO
 - Root privileges required
-- Target disk will be **completely erased** (unless `--no-format`)
-
-## Partition Layout
-
-| Partition | Size | Type | Filesystem | Mount |
-|-----------|------|------|------------|-------|
-| 1 | 512MB | EFI System | FAT32 | /boot |
-| 2 | Remaining | Linux root | ext4 | / |
-
-## After Installation
-
-1. Remove the installation media
-2. Reboot
-3. Log in as root with the password you set
+- Target directory must be mounted and ready
 
 ## Building
 
 ```bash
 cargo build --release
 ```
-
-The release binary is optimized with LTO and symbol stripping for small size.
 
 ## License
 

@@ -2,13 +2,16 @@
 
 ## STOP. READ. THEN ACT.
 
-Before modifying this crate, read `src/main.rs` to understand the installation flow.
+Before modifying this crate, read `src/main.rs` to understand the extraction flow.
 
 ---
 
 ## What is recstrap?
 
-LevitateOS installer. Extracts the squashfs from the live ISO to disk and configures the bootloader. Equivalent to Arch's `archinstall`.
+LevitateOS system extractor. **Like pacstrap, NOT like archinstall.**
+
+Extracts the squashfs from the live ISO to a target directory. That's it.
+User does EVERYTHING else manually (partitioning, formatting, fstab, bootloader).
 
 ## Development
 
@@ -19,21 +22,26 @@ cargo clippy
 
 ## Key Rules
 
-1. **Don't skip confirmation** - Always confirm before erasing disks
-2. **Handle NVMe naming** - `/dev/nvme0n1p1` vs `/dev/sda1`
-3. **Use UUIDs in fstab** - Never use device paths
-4. **Keep it simple** - This runs in the live ISO environment
+1. **recstrap = pacstrap** - Just extract, nothing else
+2. **Keep it simple** - ~50 lines, one job
+3. **No automation** - User does manual install (like Arch)
 
-## Installation Steps
+## What recstrap does
 
-1. Partition disk (GPT)
-2. Format partitions (FAT32 + ext4)
-3. Mount partitions
-4. Extract squashfs
-5. Generate fstab
-6. Install systemd-boot
-7. Set root password
-8. Unmount
+```bash
+recstrap /mnt                    # Extract squashfs to /mnt
+recstrap /mnt --squashfs /path   # Custom squashfs location
+```
+
+## What recstrap does NOT do
+
+- Partitioning (user runs fdisk/parted)
+- Formatting (user runs mkfs)
+- Mounting (user runs mount)
+- fstab generation (user runs genfstab)
+- Bootloader (user runs bootctl)
+- Password setting (user runs passwd)
+- User creation (user runs useradd)
 
 ## Testing
 
