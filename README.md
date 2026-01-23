@@ -2,6 +2,37 @@
 
 LevitateOS system extractor. Like `pacstrap` for Arch Linux - extracts the base system to a target directory.
 
+## Status
+
+| Metric | Value |
+|--------|-------|
+| Stage | Beta |
+| Target | x86_64 Linux |
+| Last verified | 2026-01-23 |
+
+### Works
+
+- Squashfs extraction to target directory
+- 14 safety checks (root, space, protected paths, etc.)
+- Cheat-aware error handling with documented cheat vectors
+- Distinct exit codes (E001-E015)
+
+### Known Issues
+
+- See parent repo issues
+
+---
+
+## Author
+
+<!-- HUMAN WRITTEN - DO NOT MODIFY -->
+
+[Waiting for human input]
+
+<!-- END HUMAN WRITTEN -->
+
+---
+
 **You do everything else manually.** Partitioning, formatting, mounting, fstab, bootloader, passwords - just like a real Arch install.
 
 ## Usage
