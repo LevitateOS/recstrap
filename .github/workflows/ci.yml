@@ -22,8 +22,53 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # Preflight: check if we need to run code checks at all
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    outputs:
+      has_code_changes: ${{ steps.check.outputs.has_code_changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check for code changes
+        id: check
+        run: |
+          # Get changed files in the last commit
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+
+          # If no changed files detected (new repo, etc.), assume code changed
+          if [ -z "$CHANGED" ]; then
+            echo "has_code_changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Check if ANY changed file is code (not docs/config)
+          # Non-code files: *.md, docs/*, .github/*, LICENSE, .gitignore
+          HAS_CODE=false
+          while IFS= read -r file; do
+            case "$file" in
+              *.md|docs/*|.github/*|LICENSE|.gitignore)
+                # Docs/config file, skip
+                ;;
+              *)
+                # Code file
+                HAS_CODE=true
+                break
+                ;;
+            esac
+          done <<< "$CHANGED"
+
+          echo "Changed files:"
+          echo "$CHANGED"
+          echo "has_code_changes=$HAS_CODE" >> $GITHUB_OUTPUT
+
   test:
     name: Test
+    needs: [preflight]
+    if: needs.preflight.outputs.has_code_changes == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -114,6 +159,8 @@ jobs:
 
   clippy:
     name: Clippy
+    needs: [preflight]
+    if: needs.preflight.outputs.has_code_changes == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -128,6 +175,8 @@ jobs:
 
   fmt:
     name: Format
+    needs: [preflight]
+    if: needs.preflight.outputs.has_code_changes == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -142,6 +191,8 @@ jobs:
 
   msrv:
     name: MSRV (1.74)
+    needs: [preflight]
+    if: needs.preflight.outputs.has_code_changes == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -157,12 +208,16 @@ jobs:
 
   release:
     name: Release
-    needs: [test, clippy, fmt, msrv]
+    needs: [preflight, test, clippy, fmt, msrv]
     # Run on push to master (auto patch bump) or workflow_dispatch (manual bump type)
     # Skip if commit is a version bump (prevent infinite loop)
+    # Skip if only docs changed
     if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/master' && !startsWith(github.event.head_commit.message, 'chore: Bump version')) ||
-      github.event_name == 'workflow_dispatch'
+      always() &&
+      needs.preflight.outputs.has_code_changes == 'true' &&
+      (needs.test.result == 'success' && needs.clippy.result == 'success' && needs.fmt.result == 'success' && needs.msrv.result == 'success') &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/master' && !startsWith(github.event.head_commit.message, 'chore: Bump version')) ||
+      github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       contents: write
