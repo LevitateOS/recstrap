@@ -24,9 +24,9 @@ jobs:
       msrv: '1.93'
       extra-apt-packages: 'squashfs-tools'
       smoke-test-script: |
-        ./target/release/recstrap --help
-        ./target/release/recstrap --version
-        ./target/release/recstrap /nonexistent 2>&1 | grep -q "E008"
+        ./target/debug/recstrap --help
+        ./target/debug/recstrap --version
+        ./target/debug/recstrap /nonexistent 2>&1 | grep -q "E008"
         which unsquashfs
 
   # Project-specific E2E tests that can't be abstracted
