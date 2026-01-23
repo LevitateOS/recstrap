@@ -190,15 +190,15 @@ jobs:
         run: cargo fmt -- --check
 
   msrv:
-    name: MSRV (1.74)
+    name: MSRV (1.93)
     needs: [preflight]
     if: needs.preflight.outputs.has_code_changes == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust 1.74
-        uses: dtolnay/rust-toolchain@1.74
+      - name: Install Rust 1.93
+        uses: dtolnay/rust-toolchain@1.93
 
       - name: Remove Cargo.lock (regenerate with compatible format)
         run: rm -f Cargo.lock
