@@ -17,91 +17,27 @@ on:
           - minor
           - major
 
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
-
 jobs:
-  # Preflight: check if we need to run code checks at all
-  preflight:
-    name: Preflight
-    runs-on: ubuntu-latest
-    outputs:
-      has_code_changes: ${{ steps.check.outputs.has_code_changes }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
+  ci:
+    uses: LevitateOS/LevitateOS/.github/workflows/rust-ci.yml@master
+    with:
+      msrv: '1.93'
+      extra-apt-packages: 'squashfs-tools'
+      smoke-test-script: |
+        ./target/release/recstrap --help
+        ./target/release/recstrap --version
+        ./target/release/recstrap /nonexistent 2>&1 | grep -q "E008"
+        which unsquashfs
 
-      - name: Check for code changes
-        id: check
-        run: |
-          # Get changed files in the last commit
-          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
-
-          # If no changed files detected (new repo, etc.), assume code changed
-          if [ -z "$CHANGED" ]; then
-            echo "has_code_changes=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # Check if ANY changed file is code (not docs/config)
-          # Non-code files: *.md, docs/*, .github/*, LICENSE, .gitignore
-          HAS_CODE=false
-          while IFS= read -r file; do
-            case "$file" in
-              *.md|docs/*|.github/*|LICENSE|.gitignore)
-                # Docs/config file, skip
-                ;;
-              *)
-                # Code file
-                HAS_CODE=true
-                break
-                ;;
-            esac
-          done <<< "$CHANGED"
-
-          echo "Changed files:"
-          echo "$CHANGED"
-          echo "has_code_changes=$HAS_CODE" >> $GITHUB_OUTPUT
-
-  test:
-    name: Test
-    needs: [preflight]
-    if: needs.preflight.outputs.has_code_changes == 'true'
+  # Project-specific E2E tests that can't be abstracted
+  e2e-test:
+    name: E2E Extraction Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install squashfs-tools
-        run: sudo apt-get update && sudo apt-get install -y squashfs-tools
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Run tests
-        run: cargo test --verbose
-
-      - name: Smoke test
-        run: |
-          cargo build --release
-          ./target/release/recstrap --help
-          ./target/release/recstrap --version
-          # Verify error codes work (E008 = must run as root, expected in CI)
-          ./target/release/recstrap /nonexistent 2>&1 | grep -q "E008"
-          # Verify unsquashfs detection works
-          which unsquashfs
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y squashfs-tools
+      - run: cargo build --release
 
       - name: End-to-end extraction test
         run: |
@@ -155,132 +91,18 @@ jobs:
           test -d /tmp/recstrap-test-target/usr/bin
           test -d /tmp/recstrap-test-target/usr/lib
 
-          echo "✓ End-to-end extraction test passed!"
-
-  clippy:
-    name: Clippy
-    needs: [preflight]
-    if: needs.preflight.outputs.has_code_changes == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Run clippy
-        run: cargo clippy -- -D warnings
-
-  fmt:
-    name: Format
-    needs: [preflight]
-    if: needs.preflight.outputs.has_code_changes == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-
-      - name: Check formatting
-        run: cargo fmt -- --check
-
-  msrv:
-    name: MSRV (1.93)
-    needs: [preflight]
-    if: needs.preflight.outputs.has_code_changes == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust 1.93
-        uses: dtolnay/rust-toolchain@1.93
-
-      - name: Remove Cargo.lock (regenerate with compatible format)
-        run: rm -f Cargo.lock
-
-      - name: Check MSRV
-        run: cargo check --verbose
+          echo "E2E extraction test passed"
 
   release:
-    name: Release
-    needs: [preflight, test, clippy, fmt, msrv]
-    # Run on push to master (auto patch bump) or workflow_dispatch (manual bump type)
-    # Skip if commit is a version bump (prevent infinite loop)
-    # Skip if only docs changed
+    needs: [ci, e2e-test]
     if: |
-      always() &&
-      needs.preflight.outputs.has_code_changes == 'true' &&
-      (needs.test.result == 'success' && needs.clippy.result == 'success' && needs.fmt.result == 'success' && needs.msrv.result == 'success') &&
-      ((github.event_name == 'push' && github.ref == 'refs/heads/master' && !startsWith(github.event.head_commit.message, 'chore: Bump version')) ||
-      github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Get current version
-        id: current
-        run: |
-          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Bump version
-        id: bump
-        run: |
-          CURRENT="${{ steps.current.outputs.version }}"
-          # Use input for workflow_dispatch, default to patch for push
-          BUMP_TYPE="${{ github.event.inputs.version_bump || 'patch' }}"
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-          case "$BUMP_TYPE" in
-            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
-            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
-            patch|*) PATCH=$((PATCH + 1)) ;;
-          esac
-          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          sed -i "s/^version = \"$CURRENT\"/version = \"$NEW_VERSION\"/" Cargo.toml
-
-      - name: Update Cargo.lock
-        run: cargo check
-
-      - name: Commit version bump
-        run: |
-          git add Cargo.toml Cargo.lock
-          git commit -m "chore: Bump version to ${{ steps.bump.outputs.version }}"
-          git push
-
-      - name: Create and push tag
-        run: |
-          git tag "v${{ steps.bump.outputs.version }}"
-          git push origin "v${{ steps.bump.outputs.version }}"
-
-      - name: Build release binary
-        run: |
-          cargo build --release
-          cd target/release
-          tar czvf ../../recstrap-x86_64-linux.tar.gz recstrap
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: v${{ steps.bump.outputs.version }}
-          name: v${{ steps.bump.outputs.version }}
-          files: recstrap-x86_64-linux.tar.gz
-          generate_release_notes: true
+      (github.event_name == 'push' &&
+       (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') &&
+       !startsWith(github.event.head_commit.message, 'chore: Bump version')) ||
+      github.event_name == 'workflow_dispatch'
+    uses: LevitateOS/LevitateOS/.github/workflows/rust-release.yml@master
+    with:
+      create-binary-artifact: true
+      binary-name: 'recstrap'
+    secrets:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
