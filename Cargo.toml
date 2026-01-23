@@ -2,12 +2,28 @@
 name = "recstrap"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.74"
 description = "LevitateOS installer - extracts squashfs to disk"
 license = "MIT"
+repository = "https://github.com/LevitateOS/recstrap"
+homepage = "https://github.com/LevitateOS/recstrap"
+readme = "README.md"
+keywords = ["pacstrap", "linux", "squashfs", "installer", "system"]
+categories = ["command-line-utilities", "filesystem"]
+authors = ["LevitateOS Contributors"]
+exclude = [
+    ".github/*",
+    "CLAUDE.md",
+]
 
 [dependencies]
-anyhow = "1.0"
 clap = { version = "4.4", features = ["derive"] }
+libc = "0.2"
+
+# Note: We implement our own guarded_ensure! macro rather than depending on
+# cheat-guard, because recstrap needs distinct exit codes (RecError) rather
+# than anyhow::Error. The macro provides cheat-aware validation with the same
+# philosophy as cheat-guard but tailored to recstrap's error handling.
 
 [profile.release]
 strip = true
