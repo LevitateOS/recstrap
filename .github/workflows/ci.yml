@@ -175,7 +175,3 @@ jobs:
           name: v${{ steps.bump.outputs.version }}
           files: recstrap-x86_64-linux.tar.gz
           generate_release_notes: true
-
-      - name: Publish to crates.io
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
