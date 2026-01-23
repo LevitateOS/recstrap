@@ -58,6 +58,60 @@ jobs:
           # Verify unsquashfs detection works
           which unsquashfs
 
+      - name: End-to-end extraction test
+        run: |
+          # Create test filesystem with essential directories
+          mkdir -p test-root/{bin,etc,lib,sbin,usr,var}
+          mkdir -p test-root/usr/{bin,lib,share}
+
+          # Add test files with known content
+          echo '#!/bin/sh' > test-root/bin/test-script
+          echo 'echo hello' >> test-root/bin/test-script
+          chmod +x test-root/bin/test-script
+          echo 'test-config=value' > test-root/etc/test.conf
+          echo 'NAME="TestOS"' > test-root/etc/os-release
+
+          # Add a symlink (important for real systems)
+          ln -s /usr/lib test-root/lib64
+
+          # Create squashfs image
+          mksquashfs test-root test.squashfs -noappend -quiet
+          ls -la test.squashfs
+
+          # Create target directory
+          mkdir -p /tmp/recstrap-test-target
+
+          # Run recstrap (with sudo for root, --force to skip mount point check)
+          sudo ./target/release/recstrap --force --squashfs test.squashfs /tmp/recstrap-test-target
+
+          # Verify essential directories exist
+          test -d /tmp/recstrap-test-target/bin
+          test -d /tmp/recstrap-test-target/etc
+          test -d /tmp/recstrap-test-target/lib
+          test -d /tmp/recstrap-test-target/sbin
+          test -d /tmp/recstrap-test-target/usr
+          test -d /tmp/recstrap-test-target/var
+
+          # Verify test files were extracted correctly
+          test -f /tmp/recstrap-test-target/bin/test-script
+          test -x /tmp/recstrap-test-target/bin/test-script
+          grep -q 'echo hello' /tmp/recstrap-test-target/bin/test-script
+
+          test -f /tmp/recstrap-test-target/etc/test.conf
+          grep -q 'test-config=value' /tmp/recstrap-test-target/etc/test.conf
+
+          test -f /tmp/recstrap-test-target/etc/os-release
+          grep -q 'NAME="TestOS"' /tmp/recstrap-test-target/etc/os-release
+
+          # Verify symlink was preserved
+          test -L /tmp/recstrap-test-target/lib64
+
+          # Verify nested directories
+          test -d /tmp/recstrap-test-target/usr/bin
+          test -d /tmp/recstrap-test-target/usr/lib
+
+          echo "✓ End-to-end extraction test passed!"
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
