@@ -6,6 +6,7 @@
 //! Tests that don't require root are run normally.
 //! Tests that require specific error codes run as root in CI or are skipped.
 
+use leviso_cheat_test::cheat_aware;
 use std::process::Command;
 
 /// Helper to run recstrap with given args
@@ -69,6 +70,15 @@ fn test_missing_target_argument() {
 // Root Check Tests
 // =============================================================================
 
+#[cheat_aware(
+    protects = "Only root can run system extraction (security boundary)",
+    severity = "HIGH",
+    ease = "EASY",
+    cheats = ["Remove root check entirely", "Add --no-root-check flag"],
+    consequence = "Unprivileged users attempt extraction and get cryptic permission errors",
+    legitimate_change = "Root requirement is fundamental to system installation. \
+        This check should never be bypassed."
+)]
 #[test]
 fn test_root_check_without_root() {
     if is_root() {
@@ -147,6 +157,15 @@ fn test_file_instead_of_directory() {
     );
 }
 
+#[cheat_aware(
+    protects = "User's root filesystem is never overwritten",
+    severity = "CRITICAL",
+    ease = "EASY",
+    cheats = ["Remove / from PROTECTED_PATHS", "Skip path validation when --force is used"],
+    consequence = "User runs 'recstrap /' and loses their entire system",
+    legitimate_change = "The root filesystem should NEVER be a valid target. \
+        If this test fails, fix the protected path validation in src/main.rs"
+)]
 #[test]
 fn test_protected_path_root() {
     if !is_root() {
@@ -167,6 +186,15 @@ fn test_protected_path_root() {
     );
 }
 
+#[cheat_aware(
+    protects = "User's /usr directory is never overwritten",
+    severity = "CRITICAL",
+    ease = "EASY",
+    cheats = ["Remove /usr from PROTECTED_PATHS", "Allow --force to bypass protected paths"],
+    consequence = "User runs 'recstrap /usr' and destroys their system binaries",
+    legitimate_change = "System directories should NEVER be valid targets. \
+        If this test fails, fix the protected path validation in src/main.rs"
+)]
 #[test]
 fn test_protected_path_usr() {
     if !is_root() {
@@ -216,6 +244,15 @@ fn test_squashfs_flag_parses() {
     );
 }
 
+#[cheat_aware(
+    protects = "Missing squashfs file produces clear error, not silent failure",
+    severity = "HIGH",
+    ease = "MEDIUM",
+    cheats = ["Return success with empty extraction", "Create empty target dir and call it success"],
+    consequence = "User gets empty system that fails to boot with no explanation",
+    legitimate_change = "Squashfs validation is essential. If the source doesn't exist, \
+        we must fail with a clear error code."
+)]
 #[test]
 fn test_squashfs_not_found() {
     if !is_root() {
@@ -282,6 +319,15 @@ fn test_squashfs_is_directory() {
     let _ = std::fs::remove_dir_all(&fake_squashfs);
 }
 
+#[cheat_aware(
+    protects = "Non-empty target directory requires explicit --force flag",
+    severity = "HIGH",
+    ease = "MEDIUM",
+    cheats = ["Silently overwrite existing files", "Auto-add --force when target has files"],
+    consequence = "User accidentally overwrites existing data without confirmation",
+    legitimate_change = "The --force flag exists for intentional overwrites. \
+        Default behavior must protect user data."
+)]
 #[test]
 fn test_target_not_empty() {
     if !is_root() {
@@ -306,6 +352,15 @@ fn test_target_not_empty() {
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
+#[cheat_aware(
+    protects = "--force flag correctly bypasses safety checks when user explicitly requests",
+    severity = "MEDIUM",
+    ease = "MEDIUM",
+    cheats = ["Make --force bypass protected path checks too", "Ignore --force flag entirely"],
+    consequence = "--force doesn't work as documented, or bypasses too many safety checks",
+    legitimate_change = "--force should skip empty/mount-point checks but NEVER protected paths. \
+        Verify PROTECTED_PATHS is checked regardless of --force."
+)]
 #[test]
 fn test_force_flag_allows_nonempty() {
     if !is_root() {
@@ -360,6 +415,15 @@ fn test_exit_code_is_error_specific() {
 // Protected Path Tests
 // =============================================================================
 
+#[cheat_aware(
+    protects = "Pseudo-filesystems like /proc are never valid extraction targets",
+    severity = "CRITICAL",
+    ease = "EASY",
+    cheats = ["Remove /proc from PROTECTED_PATHS", "Only check for block devices"],
+    consequence = "User runs 'recstrap /proc' and corrupts kernel interface",
+    legitimate_change = "Pseudo-filesystems should NEVER be valid targets. \
+        If this test fails, fix the protected path list in src/main.rs"
+)]
 #[test]
 fn test_protected_path_proc() {
     if !is_root() {

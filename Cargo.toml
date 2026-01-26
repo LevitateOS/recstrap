@@ -25,6 +25,9 @@ libc = "0.2"
 # than anyhow::Error. The macro provides cheat-aware validation with the same
 # philosophy as cheat-guard but tailored to recstrap's error handling.
 
+[dev-dependencies]
+leviso-cheat-test = { path = "../../testing/cheat-test" }
+
 [profile.release]
 strip = true
 lto = true
