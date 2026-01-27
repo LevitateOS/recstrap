@@ -113,6 +113,97 @@ pub fn ensure_erofs_module() -> bool {
     erofs_supported()
 }
 
+/// Check if ssh-keygen is available
+pub fn ssh_keygen_available() -> bool {
+    Command::new("ssh-keygen")
+        .arg("--help")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
+}
+
+/// Regenerate SSH host keys in the target system.
+///
+/// SECURITY: The rootfs image contains pre-generated SSH host keys shared by
+/// all installations. This function regenerates fresh keys for each installed
+/// system to prevent MITM attacks.
+///
+/// Keys generated:
+/// - RSA 3072-bit
+/// - ECDSA P-256
+/// - Ed25519
+///
+/// Returns Ok(()) on success, Err on failure.
+pub fn regenerate_ssh_host_keys(target: &Path, quiet: bool) -> std::io::Result<()> {
+    let ssh_dir = target.join("etc/ssh");
+
+    // Skip if /etc/ssh doesn't exist (unusual, but handle gracefully)
+    if !ssh_dir.is_dir() {
+        if !quiet {
+            eprintln!("recstrap: warning: /etc/ssh not found, skipping SSH key regeneration");
+        }
+        return Ok(());
+    }
+
+    // Check if ssh-keygen is available
+    if !ssh_keygen_available() {
+        if !quiet {
+            eprintln!("recstrap: warning: ssh-keygen not found, skipping SSH key regeneration");
+            eprintln!("         (installed system will use shared keys - regenerate manually!)");
+        }
+        return Ok(());
+    }
+
+    let key_types = [
+        ("rsa", 3072),
+        ("ecdsa", 256),
+        ("ed25519", 0),
+    ];
+
+    for (key_type, bits) in key_types {
+        let key_path = ssh_dir.join(format!("ssh_host_{}_key", key_type));
+        let pub_key_path = ssh_dir.join(format!("ssh_host_{}_key.pub", key_type));
+
+        // Remove old keys (from shared rootfs image)
+        let _ = fs::remove_file(&key_path);
+        let _ = fs::remove_file(&pub_key_path);
+
+        // Generate fresh key pair
+        let mut cmd = Command::new("ssh-keygen");
+        cmd.arg("-t").arg(key_type)
+            .arg("-f").arg(&key_path)
+            .arg("-N").arg("")  // Empty passphrase
+            .arg("-q");         // Quiet mode
+
+        if bits > 0 {
+            cmd.arg("-b").arg(bits.to_string());
+        }
+
+        let status = cmd.status()?;
+        if !status.success() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("ssh-keygen failed for {} key", key_type),
+            ));
+        }
+
+        // Verify both files were created
+        if !key_path.exists() || !pub_key_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("SSH {} key pair not created", key_type),
+            ));
+        }
+    }
+
+    if !quiet {
+        eprintln!("  Generated fresh SSH host keys (rsa, ecdsa, ed25519)");
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

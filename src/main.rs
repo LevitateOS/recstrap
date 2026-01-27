@@ -63,7 +63,8 @@ use constants::{MIN_REQUIRED_BYTES, ROOTFS_SEARCH_PATHS};
 use error::{ErrorCode, RecError, Result};
 use helpers::{
     can_read_rootfs, ensure_erofs_module, find_rootfs, get_available_space, is_dir_empty,
-    is_mount_point, is_protected_path, is_root, is_rootfs_inside_target, unsquashfs_available,
+    is_mount_point, is_protected_path, is_root, is_rootfs_inside_target, regenerate_ssh_host_keys,
+    unsquashfs_available,
 };
 use rootfs::{extract_erofs, extract_squashfs, validate_rootfs_magic, verify_extraction, RootfsType};
 
@@ -454,6 +455,24 @@ fn run() -> Result<()> {
 
     // Verify extraction produced a valid system
     verify_extraction(&target)?;
+
+    // =========================================================================
+    // PHASE 7: Security Hardening
+    // =========================================================================
+
+    // SECURITY: Regenerate SSH host keys to prevent MITM attacks.
+    // The rootfs image contains pre-generated keys shared by all installations.
+    // Each installed system needs unique keys.
+    if !args.quiet {
+        eprintln!("Regenerating SSH host keys...");
+    }
+    if let Err(e) = regenerate_ssh_host_keys(&target, args.quiet) {
+        // Warning only - not fatal since user can regenerate manually
+        if !args.quiet {
+            eprintln!("recstrap: warning: SSH key regeneration failed: {}", e);
+            eprintln!("         Run 'ssh-keygen -A' in chroot to generate keys manually");
+        }
+    }
 
     if !args.quiet {
         eprintln!();
