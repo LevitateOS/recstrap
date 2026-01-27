@@ -18,6 +18,7 @@ exclude = [
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
+distro-spec = { path = "../../distro-spec" }
 libc = "0.2"
 
 # Note: We implement our own guarded_ensure! macro rather than depending on

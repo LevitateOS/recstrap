@@ -1,5 +1,8 @@
 //! Constants for recstrap.
 
+// Re-export PROTECTED_PATHS from distro-spec (single source of truth)
+pub use distro_spec::shared::PROTECTED_PATHS;
+
 /// Common rootfs locations to search (in order of preference).
 /// EROFS paths are listed first as it's the modern format (Fedora 42+, LevitateOS).
 pub const ROOTFS_SEARCH_PATHS: &[&str] = &[
@@ -17,13 +20,6 @@ pub const ROOTFS_SEARCH_PATHS: &[&str] = &[
 
 /// Essential directories that must exist after extraction
 pub const ESSENTIAL_DIRS: &[&str] = &["bin", "etc", "lib", "sbin", "usr", "var"];
-
-/// Protected paths that should never be extraction targets
-/// These are critical system directories that would be destroyed if overwritten
-pub const PROTECTED_PATHS: &[&str] = &[
-    "/", "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib64", "/opt", "/proc", "/root",
-    "/run", "/sbin", "/srv", "/sys", "/tmp", "/usr", "/var",
-];
 
 /// Minimum required space in bytes (2GB - typical compressed squashfs expands to this)
 pub const MIN_REQUIRED_BYTES: u64 = 2 * 1024 * 1024 * 1024;

@@ -7,7 +7,9 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::constants::{PROTECTED_PATHS, ROOTFS_SEARCH_PATHS};
+use crate::constants::ROOTFS_SEARCH_PATHS;
+// Re-export is_protected_path from distro-spec (single source of truth)
+pub use distro_spec::shared::is_protected_path;
 
 /// Check if running as root
 pub fn is_root() -> bool {
