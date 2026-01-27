@@ -6,6 +6,7 @@
 //! Tests that don't require root are run normally.
 //! Tests that require specific error codes run as root in CI or are skipped.
 
+use distro_spec::shared::is_root;
 use leviso_cheat_test::cheat_aware;
 use std::process::Command;
 
@@ -15,11 +16,6 @@ fn run_recstrap(args: &[&str]) -> std::process::Output {
         .args(args)
         .output()
         .expect("Failed to execute recstrap")
-}
-
-/// Check if running as root
-fn is_root() -> bool {
-    unsafe { libc::geteuid() == 0 }
 }
 
 // =============================================================================

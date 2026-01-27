@@ -54,6 +54,7 @@ mod rootfs;
 mod validation;
 
 use clap::Parser;
+use distro_spec::shared::error::ToolErrorCode;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -389,7 +390,7 @@ fn run() -> Result<()> {
         RootfsType::Squashfs => {
             guarded_ensure!(
                 unsquashfs_available(),
-                RecError::unsquashfs_not_installed(),
+                RecError::tool_not_installed("unsquashfs", "squashfs-tools"),
                 protects = "Required extraction tool is present",
                 severity = "CRITICAL",
                 cheats = [

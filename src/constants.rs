@@ -1,34 +1,14 @@
 //! Constants for recstrap.
+//!
+//! Most constants are now in distro-spec::shared (single source of truth).
+//! This module re-exports them for local use.
 
-// Re-export PROTECTED_PATHS from distro-spec (single source of truth)
-pub use distro_spec::shared::PROTECTED_PATHS;
+// Re-export from distro-spec (single source of truth)
+pub use distro_spec::shared::{
+    EROFS_MAGIC, ESSENTIAL_DIRS, MIN_REQUIRED_BYTES, ROOTFS_SEARCH_PATHS, SQUASHFS_MAGIC,
+};
 
-/// Common rootfs locations to search (in order of preference).
-/// EROFS paths are listed first as it's the modern format (Fedora 42+, LevitateOS).
-pub const ROOTFS_SEARCH_PATHS: &[&str] = &[
-    // EROFS (modern - LevitateOS default)
-    "/media/cdrom/live/filesystem.erofs",
-    "/run/initramfs/live/filesystem.erofs",
-    "/run/archiso/bootmnt/live/filesystem.erofs",
-    "/mnt/cdrom/live/filesystem.erofs",
-    // Squashfs (legacy fallback)
-    "/media/cdrom/live/filesystem.squashfs",
-    "/run/initramfs/live/filesystem.squashfs",
-    "/run/archiso/bootmnt/live/filesystem.squashfs",
-    "/mnt/cdrom/live/filesystem.squashfs",
-];
-
-/// Essential directories that must exist after extraction
-pub const ESSENTIAL_DIRS: &[&str] = &["bin", "etc", "lib", "sbin", "usr", "var"];
-
-/// Minimum required space in bytes (2GB - typical compressed squashfs expands to this)
-pub const MIN_REQUIRED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-
-/// EROFS magic number (little-endian at offset 1024)
-pub const EROFS_MAGIC: u32 = 0xe0f5e1e2;
-
-/// Squashfs magic bytes at offset 0
-pub const SQUASHFS_MAGIC: &[u8; 4] = b"hsqs";
+// Note: EROFS_MAGIC_OFFSET is also available from distro_spec::shared if needed.
 
 #[cfg(test)]
 mod tests {

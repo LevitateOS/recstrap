@@ -1,5 +1,9 @@
 //! Error codes and error handling for recstrap.
+//!
+//! Uses the shared error framework from distro-spec.
 
+use distro_spec::impl_error_code_display;
+use distro_spec::shared::error::ToolErrorCode;
 use std::fmt;
 
 /// Error codes for recstrap failures.
@@ -11,9 +15,9 @@ pub enum ErrorCode {
     NotADirectory = 2,
     /// E003: Target directory not writable
     NotWritable = 3,
-    /// E004: Rootfs image not found (replaces SquashfsNotFound)
+    /// E004: Rootfs image not found
     RootfsNotFound = 4,
-    /// E005: Extraction command failed (replaces UnsquashfsFailed)
+    /// E005: Extraction command failed
     ExtractionFailed = 5,
     /// E006: Extracted system verification failed
     ExtractionVerificationFailed = 6,
@@ -29,11 +33,11 @@ pub enum ErrorCode {
     NotMountPoint = 11,
     /// E012: Insufficient disk space
     InsufficientSpace = 12,
-    /// E013: Rootfs is not a regular file (replaces SquashfsNotFile)
+    /// E013: Rootfs is not a regular file
     RootfsNotFile = 13,
-    /// E014: Rootfs is not readable (replaces SquashfsNotReadable)
+    /// E014: Rootfs is not readable
     RootfsNotReadable = 14,
-    /// E015: Rootfs is inside target directory (replaces SquashfsInsideTarget)
+    /// E015: Rootfs is inside target directory
     RootfsInsideTarget = 15,
     /// E016: Rootfs file has invalid magic bytes (corrupt or wrong format)
     InvalidRootfsFormat = 16,
@@ -41,25 +45,8 @@ pub enum ErrorCode {
     ErofsNotSupported = 17,
 }
 
-// Backwards-compatible aliases for error codes
-impl ErrorCode {
-    #[allow(non_upper_case_globals)]
-    pub const SquashfsNotFound: ErrorCode = ErrorCode::RootfsNotFound;
-    #[allow(non_upper_case_globals)]
-    pub const UnsquashfsFailed: ErrorCode = ErrorCode::ExtractionFailed;
-    #[allow(non_upper_case_globals)]
-    pub const UnsquashfsNotInstalled: ErrorCode = ErrorCode::ToolNotInstalled;
-    #[allow(non_upper_case_globals)]
-    pub const SquashfsNotFile: ErrorCode = ErrorCode::RootfsNotFile;
-    #[allow(non_upper_case_globals)]
-    pub const SquashfsNotReadable: ErrorCode = ErrorCode::RootfsNotReadable;
-    #[allow(non_upper_case_globals)]
-    pub const SquashfsInsideTarget: ErrorCode = ErrorCode::RootfsInsideTarget;
-}
-
-impl ErrorCode {
-    /// Get the numeric code as a string (e.g., "E001").
-    pub fn code(&self) -> &'static str {
+impl ToolErrorCode for ErrorCode {
+    fn code(&self) -> &'static str {
         match self {
             ErrorCode::TargetNotFound => "E001",
             ErrorCode::NotADirectory => "E002",
@@ -81,17 +68,12 @@ impl ErrorCode {
         }
     }
 
-    /// Get the exit code value
-    pub fn exit_code(&self) -> u8 {
+    fn exit_code(&self) -> u8 {
         *self as u8
     }
 }
 
-impl fmt::Display for ErrorCode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.code())
-    }
-}
+impl_error_code_display!(ErrorCode);
 
 /// A recstrap error with code and context.
 #[derive(Debug)]
@@ -142,11 +124,6 @@ impl RecError {
         )
     }
 
-    // Backwards-compatible alias
-    pub fn squashfs_not_found(paths_tried: &[&str]) -> Self {
-        Self::rootfs_not_found(paths_tried)
-    }
-
     pub fn extraction_failed(detail: &str) -> Self {
         let detail = if detail.is_empty() {
             "unknown error (check dmesg for details)".to_string()
@@ -159,11 +136,6 @@ impl RecError {
         )
     }
 
-    // Backwards-compatible alias
-    pub fn unsquashfs_failed(detail: &str) -> Self {
-        Self::extraction_failed(detail)
-    }
-
     pub fn extraction_verification_failed(missing: &[&str]) -> Self {
         Self::new(
             ErrorCode::ExtractionVerificationFailed,
@@ -174,10 +146,10 @@ impl RecError {
         )
     }
 
-    pub fn unsquashfs_not_installed() -> Self {
+    pub fn tool_not_installed(tool: &str, package: &str) -> Self {
         Self::new(
-            ErrorCode::UnsquashfsNotInstalled,
-            "unsquashfs not found in PATH (install squashfs-tools)",
+            ErrorCode::ToolNotInstalled,
+            format!("{} not found in PATH (install {})", tool, package),
         )
     }
 
@@ -232,21 +204,11 @@ impl RecError {
         )
     }
 
-    // Backwards-compatible alias
-    pub fn squashfs_not_file(path: &str) -> Self {
-        Self::rootfs_not_file(path)
-    }
-
     pub fn rootfs_not_readable(path: &str) -> Self {
         Self::new(
             ErrorCode::RootfsNotReadable,
             format!("cannot read rootfs '{}' (permission denied?)", path),
         )
-    }
-
-    // Backwards-compatible alias
-    pub fn squashfs_not_readable(path: &str) -> Self {
-        Self::rootfs_not_readable(path)
     }
 
     pub fn rootfs_inside_target(rootfs: &str, target: &str) -> Self {
@@ -257,11 +219,6 @@ impl RecError {
                 rootfs, target
             ),
         )
-    }
-
-    // Backwards-compatible alias
-    pub fn squashfs_inside_target(squashfs: &str, target: &str) -> Self {
-        Self::rootfs_inside_target(squashfs, target)
     }
 
     pub fn invalid_rootfs_format(path: &str, detail: &str) -> Self {
@@ -298,18 +255,18 @@ mod tests {
         assert_eq!(ErrorCode::TargetNotFound.code(), "E001");
         assert_eq!(ErrorCode::NotADirectory.code(), "E002");
         assert_eq!(ErrorCode::NotWritable.code(), "E003");
-        assert_eq!(ErrorCode::SquashfsNotFound.code(), "E004");
-        assert_eq!(ErrorCode::UnsquashfsFailed.code(), "E005");
+        assert_eq!(ErrorCode::RootfsNotFound.code(), "E004");
+        assert_eq!(ErrorCode::ExtractionFailed.code(), "E005");
         assert_eq!(ErrorCode::ExtractionVerificationFailed.code(), "E006");
-        assert_eq!(ErrorCode::UnsquashfsNotInstalled.code(), "E007");
+        assert_eq!(ErrorCode::ToolNotInstalled.code(), "E007");
         assert_eq!(ErrorCode::NotRoot.code(), "E008");
         assert_eq!(ErrorCode::TargetNotEmpty.code(), "E009");
         assert_eq!(ErrorCode::ProtectedPath.code(), "E010");
         assert_eq!(ErrorCode::NotMountPoint.code(), "E011");
         assert_eq!(ErrorCode::InsufficientSpace.code(), "E012");
-        assert_eq!(ErrorCode::SquashfsNotFile.code(), "E013");
-        assert_eq!(ErrorCode::SquashfsNotReadable.code(), "E014");
-        assert_eq!(ErrorCode::SquashfsInsideTarget.code(), "E015");
+        assert_eq!(ErrorCode::RootfsNotFile.code(), "E013");
+        assert_eq!(ErrorCode::RootfsNotReadable.code(), "E014");
+        assert_eq!(ErrorCode::RootfsInsideTarget.code(), "E015");
         assert_eq!(ErrorCode::InvalidRootfsFormat.code(), "E016");
         assert_eq!(ErrorCode::ErofsNotSupported.code(), "E017");
     }
@@ -319,18 +276,18 @@ mod tests {
         assert_eq!(ErrorCode::TargetNotFound.exit_code(), 1);
         assert_eq!(ErrorCode::NotADirectory.exit_code(), 2);
         assert_eq!(ErrorCode::NotWritable.exit_code(), 3);
-        assert_eq!(ErrorCode::SquashfsNotFound.exit_code(), 4);
-        assert_eq!(ErrorCode::UnsquashfsFailed.exit_code(), 5);
+        assert_eq!(ErrorCode::RootfsNotFound.exit_code(), 4);
+        assert_eq!(ErrorCode::ExtractionFailed.exit_code(), 5);
         assert_eq!(ErrorCode::ExtractionVerificationFailed.exit_code(), 6);
-        assert_eq!(ErrorCode::UnsquashfsNotInstalled.exit_code(), 7);
+        assert_eq!(ErrorCode::ToolNotInstalled.exit_code(), 7);
         assert_eq!(ErrorCode::NotRoot.exit_code(), 8);
         assert_eq!(ErrorCode::TargetNotEmpty.exit_code(), 9);
         assert_eq!(ErrorCode::ProtectedPath.exit_code(), 10);
         assert_eq!(ErrorCode::NotMountPoint.exit_code(), 11);
         assert_eq!(ErrorCode::InsufficientSpace.exit_code(), 12);
-        assert_eq!(ErrorCode::SquashfsNotFile.exit_code(), 13);
-        assert_eq!(ErrorCode::SquashfsNotReadable.exit_code(), 14);
-        assert_eq!(ErrorCode::SquashfsInsideTarget.exit_code(), 15);
+        assert_eq!(ErrorCode::RootfsNotFile.exit_code(), 13);
+        assert_eq!(ErrorCode::RootfsNotReadable.exit_code(), 14);
+        assert_eq!(ErrorCode::RootfsInsideTarget.exit_code(), 15);
         assert_eq!(ErrorCode::InvalidRootfsFormat.exit_code(), 16);
         assert_eq!(ErrorCode::ErofsNotSupported.exit_code(), 17);
     }
@@ -361,23 +318,23 @@ mod tests {
 
     #[test]
     fn test_error_rootfs_not_found() {
-        let err = RecError::squashfs_not_found(&["/path/to/rootfs"]);
+        let err = RecError::rootfs_not_found(&["/path/to/rootfs"]);
         let msg = err.to_string();
         assert!(msg.starts_with("E004:"), "Error was: {}", msg);
         assert!(msg.contains("rootfs not found"), "Error was: {}", msg);
     }
 
     #[test]
-    fn test_error_unsquashfs_failed_empty() {
-        let err = RecError::unsquashfs_failed("");
+    fn test_error_extraction_failed_empty() {
+        let err = RecError::extraction_failed("");
         let msg = err.to_string();
         assert!(msg.starts_with("E005:"), "Error was: {}", msg);
         assert!(msg.contains("unknown error"), "Error was: {}", msg);
     }
 
     #[test]
-    fn test_error_unsquashfs_failed_with_detail() {
-        let err = RecError::unsquashfs_failed("exit code 1");
+    fn test_error_extraction_failed_with_detail() {
+        let err = RecError::extraction_failed("exit code 1");
         let msg = err.to_string();
         assert!(msg.starts_with("E005:"), "Error was: {}", msg);
         assert!(msg.contains("exit code 1"), "Error was: {}", msg);
@@ -394,8 +351,8 @@ mod tests {
     }
 
     #[test]
-    fn test_error_unsquashfs_not_installed() {
-        let err = RecError::unsquashfs_not_installed();
+    fn test_error_tool_not_installed() {
+        let err = RecError::tool_not_installed("unsquashfs", "squashfs-tools");
         let msg = err.to_string();
         assert!(msg.starts_with("E007:"), "Error was: {}", msg);
         assert!(msg.contains("unsquashfs not found"), "Error was: {}", msg);
@@ -445,24 +402,24 @@ mod tests {
     }
 
     #[test]
-    fn test_error_squashfs_not_file() {
-        let err = RecError::squashfs_not_file("/some/directory");
+    fn test_error_rootfs_not_file() {
+        let err = RecError::rootfs_not_file("/some/directory");
         let msg = err.to_string();
         assert!(msg.starts_with("E013:"), "Error was: {}", msg);
         assert!(msg.contains("not a regular file"), "Error was: {}", msg);
     }
 
     #[test]
-    fn test_error_squashfs_not_readable() {
-        let err = RecError::squashfs_not_readable("/secret/file.squashfs");
+    fn test_error_rootfs_not_readable() {
+        let err = RecError::rootfs_not_readable("/secret/file.erofs");
         let msg = err.to_string();
         assert!(msg.starts_with("E014:"), "Error was: {}", msg);
         assert!(msg.contains("cannot read"), "Error was: {}", msg);
     }
 
     #[test]
-    fn test_error_squashfs_inside_target() {
-        let err = RecError::squashfs_inside_target("/mnt/fs.squashfs", "/mnt");
+    fn test_error_rootfs_inside_target() {
+        let err = RecError::rootfs_inside_target("/mnt/fs.erofs", "/mnt");
         let msg = err.to_string();
         assert!(msg.starts_with("E015:"), "Error was: {}", msg);
         assert!(msg.contains("recursive"), "Error was: {}", msg);
@@ -492,18 +449,18 @@ mod tests {
             ErrorCode::TargetNotFound,
             ErrorCode::NotADirectory,
             ErrorCode::NotWritable,
-            ErrorCode::SquashfsNotFound,
-            ErrorCode::UnsquashfsFailed,
+            ErrorCode::RootfsNotFound,
+            ErrorCode::ExtractionFailed,
             ErrorCode::ExtractionVerificationFailed,
-            ErrorCode::UnsquashfsNotInstalled,
+            ErrorCode::ToolNotInstalled,
             ErrorCode::NotRoot,
             ErrorCode::TargetNotEmpty,
             ErrorCode::ProtectedPath,
             ErrorCode::NotMountPoint,
             ErrorCode::InsufficientSpace,
-            ErrorCode::SquashfsNotFile,
-            ErrorCode::SquashfsNotReadable,
-            ErrorCode::SquashfsInsideTarget,
+            ErrorCode::RootfsNotFile,
+            ErrorCode::RootfsNotReadable,
+            ErrorCode::RootfsInsideTarget,
             ErrorCode::InvalidRootfsFormat,
             ErrorCode::ErofsNotSupported,
         ];
@@ -524,18 +481,18 @@ mod tests {
             ErrorCode::TargetNotFound,
             ErrorCode::NotADirectory,
             ErrorCode::NotWritable,
-            ErrorCode::SquashfsNotFound,
-            ErrorCode::UnsquashfsFailed,
+            ErrorCode::RootfsNotFound,
+            ErrorCode::ExtractionFailed,
             ErrorCode::ExtractionVerificationFailed,
-            ErrorCode::UnsquashfsNotInstalled,
+            ErrorCode::ToolNotInstalled,
             ErrorCode::NotRoot,
             ErrorCode::TargetNotEmpty,
             ErrorCode::ProtectedPath,
             ErrorCode::NotMountPoint,
             ErrorCode::InsufficientSpace,
-            ErrorCode::SquashfsNotFile,
-            ErrorCode::SquashfsNotReadable,
-            ErrorCode::SquashfsInsideTarget,
+            ErrorCode::RootfsNotFile,
+            ErrorCode::RootfsNotReadable,
+            ErrorCode::RootfsInsideTarget,
             ErrorCode::InvalidRootfsFormat,
             ErrorCode::ErofsNotSupported,
         ];

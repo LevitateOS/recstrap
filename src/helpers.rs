@@ -3,18 +3,13 @@
 use std::fs::{self, File};
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::constants::ROOTFS_SEARCH_PATHS;
-// Re-export is_protected_path from distro-spec (single source of truth)
-pub use distro_spec::shared::is_protected_path;
 
-/// Check if running as root
-pub fn is_root() -> bool {
-    unsafe { libc::geteuid() == 0 }
-}
+// Re-export from distro-spec (single source of truth)
+pub use distro_spec::shared::{is_mount_point, is_protected_path, is_root};
 
 /// Check if unsquashfs is available (only needed for squashfs)
 pub fn unsquashfs_available() -> bool {
@@ -50,24 +45,8 @@ pub fn is_dir_empty(path: &Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
-/// Check if a path is a mount point by comparing device IDs with parent
-pub fn is_mount_point(path: &Path) -> std::io::Result<bool> {
-    let path_meta = fs::metadata(path)?;
-    let path_dev = path_meta.dev();
-
-    // Get parent directory
-    let parent = match path.parent() {
-        Some(p) if p.as_os_str().is_empty() => Path::new("/"),
-        Some(p) => p,
-        None => return Ok(true), // Root is always a mount point
-    };
-
-    let parent_meta = fs::metadata(parent)?;
-    let parent_dev = parent_meta.dev();
-
-    // If device IDs differ, it's a mount point
-    Ok(path_dev != parent_dev)
-}
+// Note: is_mount_point() is now in distro-spec::shared::system (single source of truth)
+// Re-exported above from distro_spec::shared::is_mount_point
 
 /// Convert OsStr to CString for libc calls, preserving non-UTF8 bytes
 pub fn path_to_cstring(path: &Path) -> std::io::Result<std::ffi::CString> {
@@ -89,13 +68,6 @@ pub fn get_available_space(path: &Path) -> std::io::Result<u64> {
 
     // Available space = f_bavail * f_frsize
     Ok(stat.f_bavail as u64 * stat.f_frsize as u64)
-}
-
-/// Check if a path is protected (should never be an extraction target)
-pub fn is_protected_path(path: &Path) -> bool {
-    PROTECTED_PATHS
-        .iter()
-        .any(|protected| path == Path::new(protected))
 }
 
 /// Check if rootfs path is inside target directory
