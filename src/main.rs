@@ -1,11 +1,11 @@
 //! recstrap - LevitateOS system extractor
 //!
-//! Like pacstrap for Arch Linux - extracts the squashfs to target directory.
+//! Like pacstrap for Arch Linux - extracts the rootfs (EROFS or squashfs) to target directory.
 //! User does EVERYTHING else manually (partitioning, formatting, fstab, bootloader).
 //!
 //! Usage:
-//!   recstrap /mnt                    # Extract squashfs to /mnt
-//!   recstrap /mnt --squashfs /path   # Custom squashfs location
+//!   recstrap /mnt                    # Extract rootfs to /mnt
+//!   recstrap /mnt --rootfs /path     # Custom rootfs location (EROFS or squashfs)
 //!   recstrap /mnt --force            # Overwrite existing files
 //!   recstrap /mnt --quiet            # Scripting mode (minimal output)
 //!
@@ -50,7 +50,7 @@
 use clap::Parser;
 use std::fmt;
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -112,9 +112,9 @@ macro_rules! guarded_ensure {
 #[derive(Parser)]
 #[command(name = "recstrap")]
 #[command(version)]
-#[command(about = "Extract LevitateOS squashfs to target directory (like pacstrap)")]
+#[command(about = "Extract LevitateOS rootfs to target directory (like pacstrap)")]
 #[command(
-    long_about = "Extracts the LevitateOS squashfs image to a target directory. \
+    long_about = "Extracts the LevitateOS rootfs image (EROFS or squashfs) to a target directory. \
     This is the pacstrap equivalent for LevitateOS - it only extracts files. \
     You must do everything else manually: partitioning, formatting, mounting, \
     fstab generation, bootloader installation, and system configuration."
@@ -123,9 +123,11 @@ struct Args {
     /// Target directory (must be mounted, e.g., /mnt)
     target: String,
 
-    /// Squashfs location (auto-detected from common paths if not specified)
-    #[arg(long)]
-    squashfs: Option<String>,
+    /// Rootfs location (auto-detected from common paths if not specified)
+    /// Supports both EROFS (.erofs) and squashfs (.squashfs) formats.
+    /// --squashfs is accepted for backwards compatibility.
+    #[arg(long, visible_alias = "squashfs")]
+    rootfs: Option<String>,
 
     /// Force extraction even if target is not empty or not a mount point
     #[arg(short, long)]
@@ -153,14 +155,14 @@ pub enum ErrorCode {
     NotADirectory = 2,
     /// E003: Target directory not writable
     NotWritable = 3,
-    /// E004: Squashfs image not found
-    SquashfsNotFound = 4,
-    /// E005: unsquashfs command failed
-    UnsquashfsFailed = 5,
+    /// E004: Rootfs image not found (replaces SquashfsNotFound)
+    RootfsNotFound = 4,
+    /// E005: Extraction command failed (replaces UnsquashfsFailed)
+    ExtractionFailed = 5,
     /// E006: Extracted system verification failed
     ExtractionVerificationFailed = 6,
-    /// E007: unsquashfs not installed
-    UnsquashfsNotInstalled = 7,
+    /// E007: Required tool not installed (unsquashfs, mount, rsync)
+    ToolNotInstalled = 7,
     /// E008: Must run as root
     NotRoot = 8,
     /// E009: Target directory not empty
@@ -171,12 +173,32 @@ pub enum ErrorCode {
     NotMountPoint = 11,
     /// E012: Insufficient disk space
     InsufficientSpace = 12,
-    /// E013: Squashfs is not a regular file
-    SquashfsNotFile = 13,
-    /// E014: Squashfs is not readable
-    SquashfsNotReadable = 14,
-    /// E015: Squashfs is inside target directory
-    SquashfsInsideTarget = 15,
+    /// E013: Rootfs is not a regular file (replaces SquashfsNotFile)
+    RootfsNotFile = 13,
+    /// E014: Rootfs is not readable (replaces SquashfsNotReadable)
+    RootfsNotReadable = 14,
+    /// E015: Rootfs is inside target directory (replaces SquashfsInsideTarget)
+    RootfsInsideTarget = 15,
+    /// E016: Rootfs file has invalid magic bytes (corrupt or wrong format)
+    InvalidRootfsFormat = 16,
+    /// E017: EROFS kernel module not available
+    ErofsNotSupported = 17,
+}
+
+// Backwards-compatible aliases for error codes
+impl ErrorCode {
+    #[allow(non_upper_case_globals)]
+    pub const SquashfsNotFound: ErrorCode = ErrorCode::RootfsNotFound;
+    #[allow(non_upper_case_globals)]
+    pub const UnsquashfsFailed: ErrorCode = ErrorCode::ExtractionFailed;
+    #[allow(non_upper_case_globals)]
+    pub const UnsquashfsNotInstalled: ErrorCode = ErrorCode::ToolNotInstalled;
+    #[allow(non_upper_case_globals)]
+    pub const SquashfsNotFile: ErrorCode = ErrorCode::RootfsNotFile;
+    #[allow(non_upper_case_globals)]
+    pub const SquashfsNotReadable: ErrorCode = ErrorCode::RootfsNotReadable;
+    #[allow(non_upper_case_globals)]
+    pub const SquashfsInsideTarget: ErrorCode = ErrorCode::RootfsInsideTarget;
 }
 
 impl ErrorCode {
@@ -186,18 +208,20 @@ impl ErrorCode {
             ErrorCode::TargetNotFound => "E001",
             ErrorCode::NotADirectory => "E002",
             ErrorCode::NotWritable => "E003",
-            ErrorCode::SquashfsNotFound => "E004",
-            ErrorCode::UnsquashfsFailed => "E005",
+            ErrorCode::RootfsNotFound => "E004",
+            ErrorCode::ExtractionFailed => "E005",
             ErrorCode::ExtractionVerificationFailed => "E006",
-            ErrorCode::UnsquashfsNotInstalled => "E007",
+            ErrorCode::ToolNotInstalled => "E007",
             ErrorCode::NotRoot => "E008",
             ErrorCode::TargetNotEmpty => "E009",
             ErrorCode::ProtectedPath => "E010",
             ErrorCode::NotMountPoint => "E011",
             ErrorCode::InsufficientSpace => "E012",
-            ErrorCode::SquashfsNotFile => "E013",
-            ErrorCode::SquashfsNotReadable => "E014",
-            ErrorCode::SquashfsInsideTarget => "E015",
+            ErrorCode::RootfsNotFile => "E013",
+            ErrorCode::RootfsNotReadable => "E014",
+            ErrorCode::RootfsInsideTarget => "E015",
+            ErrorCode::InvalidRootfsFormat => "E016",
+            ErrorCode::ErofsNotSupported => "E017",
         }
     }
 
@@ -252,26 +276,36 @@ impl RecError {
         )
     }
 
-    pub fn squashfs_not_found(paths_tried: &[&str]) -> Self {
+    pub fn rootfs_not_found(paths_tried: &[&str]) -> Self {
         Self::new(
-            ErrorCode::SquashfsNotFound,
+            ErrorCode::RootfsNotFound,
             format!(
-                "squashfs not found (tried: {}). Make sure you're running from the live ISO or specify --squashfs",
+                "rootfs not found (tried: {}). Make sure you're running from the live ISO or specify --rootfs",
                 paths_tried.join(", ")
             ),
         )
     }
 
-    pub fn unsquashfs_failed(detail: &str) -> Self {
+    // Backwards-compatible alias
+    pub fn squashfs_not_found(paths_tried: &[&str]) -> Self {
+        Self::rootfs_not_found(paths_tried)
+    }
+
+    pub fn extraction_failed(detail: &str) -> Self {
         let detail = if detail.is_empty() {
             "unknown error (check dmesg for details)".to_string()
         } else {
             detail.trim().to_string()
         };
         Self::new(
-            ErrorCode::UnsquashfsFailed,
-            format!("unsquashfs failed: {}", detail),
+            ErrorCode::ExtractionFailed,
+            format!("extraction failed: {}", detail),
         )
+    }
+
+    // Backwards-compatible alias
+    pub fn unsquashfs_failed(detail: &str) -> Self {
+        Self::extraction_failed(detail)
     }
 
     pub fn extraction_verification_failed(missing: &[&str]) -> Self {
@@ -335,27 +369,56 @@ impl RecError {
         )
     }
 
-    pub fn squashfs_not_file(path: &str) -> Self {
+    pub fn rootfs_not_file(path: &str) -> Self {
         Self::new(
-            ErrorCode::SquashfsNotFile,
+            ErrorCode::RootfsNotFile,
             format!("'{}' is not a regular file", path),
         )
     }
 
-    pub fn squashfs_not_readable(path: &str) -> Self {
+    // Backwards-compatible alias
+    pub fn squashfs_not_file(path: &str) -> Self {
+        Self::rootfs_not_file(path)
+    }
+
+    pub fn rootfs_not_readable(path: &str) -> Self {
         Self::new(
-            ErrorCode::SquashfsNotReadable,
-            format!("cannot read squashfs '{}' (permission denied?)", path),
+            ErrorCode::RootfsNotReadable,
+            format!("cannot read rootfs '{}' (permission denied?)", path),
         )
     }
 
-    pub fn squashfs_inside_target(squashfs: &str, target: &str) -> Self {
+    // Backwards-compatible alias
+    pub fn squashfs_not_readable(path: &str) -> Self {
+        Self::rootfs_not_readable(path)
+    }
+
+    pub fn rootfs_inside_target(rootfs: &str, target: &str) -> Self {
         Self::new(
-            ErrorCode::SquashfsInsideTarget,
+            ErrorCode::RootfsInsideTarget,
             format!(
-                "squashfs '{}' is inside target '{}' - this would cause recursive extraction",
-                squashfs, target
+                "rootfs '{}' is inside target '{}' - this would cause recursive extraction",
+                rootfs, target
             ),
+        )
+    }
+
+    // Backwards-compatible alias
+    pub fn squashfs_inside_target(squashfs: &str, target: &str) -> Self {
+        Self::rootfs_inside_target(squashfs, target)
+    }
+
+    pub fn invalid_rootfs_format(path: &str, detail: &str) -> Self {
+        Self::new(
+            ErrorCode::InvalidRootfsFormat,
+            format!("'{}' is not a valid rootfs image: {}", path, detail),
+        )
+    }
+
+    pub fn erofs_not_supported() -> Self {
+        Self::new(
+            ErrorCode::ErofsNotSupported,
+            "EROFS filesystem not supported by kernel (try: modprobe erofs)",
         )
     }
 }
@@ -374,8 +437,15 @@ type Result<T> = std::result::Result<T, RecError>;
 // Constants
 // =============================================================================
 
-/// Common squashfs locations to search (in order of preference)
-const SQUASHFS_SEARCH_PATHS: &[&str] = &[
+/// Common rootfs locations to search (in order of preference).
+/// EROFS paths are listed first as it's the modern format (Fedora 42+, LevitateOS).
+const ROOTFS_SEARCH_PATHS: &[&str] = &[
+    // EROFS (modern - LevitateOS default)
+    "/media/cdrom/live/filesystem.erofs",
+    "/run/initramfs/live/filesystem.erofs",
+    "/run/archiso/bootmnt/live/filesystem.erofs",
+    "/mnt/cdrom/live/filesystem.erofs",
+    // Squashfs (legacy fallback)
     "/media/cdrom/live/filesystem.squashfs",
     "/run/initramfs/live/filesystem.squashfs",
     "/run/archiso/bootmnt/live/filesystem.squashfs",
@@ -404,7 +474,24 @@ fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
-/// Check if unsquashfs is available
+/// Rootfs type detected from file extension
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RootfsType {
+    Erofs,
+    Squashfs,
+}
+
+impl RootfsType {
+    fn from_path(path: &Path) -> Option<Self> {
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("erofs") => Some(Self::Erofs),
+            Some("squashfs") => Some(Self::Squashfs),
+            _ => None,
+        }
+    }
+}
+
+/// Check if unsquashfs is available (only needed for squashfs)
 fn unsquashfs_available() -> bool {
     Command::new("unsquashfs")
         .arg("--help")
@@ -414,9 +501,9 @@ fn unsquashfs_available() -> bool {
         .is_ok()
 }
 
-/// Find squashfs from search paths
-fn find_squashfs() -> Option<&'static str> {
-    SQUASHFS_SEARCH_PATHS
+/// Find rootfs from search paths (prefers EROFS over squashfs)
+fn find_rootfs() -> Option<&'static str> {
+    ROOTFS_SEARCH_PATHS
         .iter()
         .find(|path| Path::new(path).exists())
         .copied()
@@ -486,13 +573,13 @@ fn is_protected_path(path: &Path) -> bool {
         .any(|protected| path == Path::new(protected))
 }
 
-/// Check if squashfs path is inside target directory
-fn is_squashfs_inside_target(squashfs: &Path, target: &Path) -> bool {
-    squashfs.starts_with(target)
+/// Check if rootfs path is inside target directory
+fn is_rootfs_inside_target(rootfs: &Path, target: &Path) -> bool {
+    rootfs.starts_with(target)
 }
 
-/// Check if we can read the squashfs file (at least the first few bytes)
-fn can_read_squashfs(path: &Path) -> bool {
+/// Check if we can read the rootfs file (at least the first few bytes)
+fn can_read_rootfs(path: &Path) -> bool {
     match File::open(path) {
         Ok(mut f) => {
             let mut buf = [0u8; 4];
@@ -500,6 +587,241 @@ fn can_read_squashfs(path: &Path) -> bool {
         }
         Err(_) => false,
     }
+}
+
+/// EROFS magic number (little-endian at offset 1024)
+const EROFS_MAGIC: u32 = 0xe0f5e1e2;
+/// Squashfs magic bytes at offset 0
+const SQUASHFS_MAGIC: &[u8; 4] = b"hsqs";
+
+/// Validate rootfs magic bytes match expected format.
+/// Returns Ok(detected_type) or Err if magic doesn't match.
+fn validate_rootfs_magic(path: &Path, expected: RootfsType) -> std::io::Result<()> {
+    let mut f = File::open(path)?;
+
+    match expected {
+        RootfsType::Erofs => {
+            // EROFS superblock is at offset 1024, magic is first 4 bytes
+            f.seek(SeekFrom::Start(1024))?;
+            let mut buf = [0u8; 4];
+            f.read_exact(&mut buf)?;
+            let magic = u32::from_le_bytes(buf);
+            if magic != EROFS_MAGIC {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "not a valid EROFS image (magic: 0x{:08x}, expected: 0x{:08x})",
+                        magic, EROFS_MAGIC
+                    ),
+                ));
+            }
+        }
+        RootfsType::Squashfs => {
+            // Squashfs magic is at offset 0
+            let mut buf = [0u8; 4];
+            f.read_exact(&mut buf)?;
+            if &buf != SQUASHFS_MAGIC {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "not a valid squashfs image (magic: {:?}, expected: {:?})",
+                        buf, SQUASHFS_MAGIC
+                    ),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Check if EROFS filesystem support is available in the kernel.
+/// Checks /proc/filesystems for "erofs" entry.
+fn erofs_supported() -> bool {
+    match fs::read_to_string("/proc/filesystems") {
+        Ok(content) => content.lines().any(|line| line.contains("erofs")),
+        Err(_) => false,
+    }
+}
+
+/// Try to load EROFS kernel module if not already loaded.
+/// Returns true if EROFS is available after the attempt.
+fn ensure_erofs_module() -> bool {
+    if erofs_supported() {
+        return true;
+    }
+
+    // Try to load the module (requires root, which we already checked)
+    let _ = Command::new("modprobe")
+        .arg("erofs")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    // Check again
+    erofs_supported()
+}
+
+// =============================================================================
+// Extraction Helpers
+// =============================================================================
+
+/// RAII guard for EROFS mount cleanup.
+/// Ensures unmount and directory removal happen even on panic or interrupt.
+struct MountGuard {
+    mount_point: PathBuf,
+    mounted: bool,
+}
+
+impl MountGuard {
+    fn new(mount_point: PathBuf) -> Self {
+        Self {
+            mount_point,
+            mounted: false,
+        }
+    }
+
+    fn set_mounted(&mut self) {
+        self.mounted = true;
+    }
+}
+
+impl Drop for MountGuard {
+    fn drop(&mut self) {
+        if self.mounted {
+            let _ = Command::new("umount").arg(&self.mount_point).status();
+        }
+        let _ = std::fs::remove_dir_all(&self.mount_point);
+    }
+}
+
+/// Extract EROFS image by mounting and copying.
+///
+/// EROFS cannot be extracted with a simple tool like unsquashfs.
+/// We mount it read-only, cp -a all files, then unmount.
+/// Uses cp -a instead of rsync as it's always available on minimal systems.
+///
+/// Uses a RAII guard to ensure cleanup even on panic/interrupt.
+fn extract_erofs(rootfs: &Path, target: &Path, quiet: bool) -> Result<()> {
+    // Create temporary mount point
+    let mount_point = std::env::temp_dir().join("recstrap-erofs-mount");
+    if mount_point.exists() {
+        // Try to unmount if leftover from previous run
+        let _ = Command::new("umount").arg(&mount_point).status();
+        std::fs::remove_dir_all(&mount_point).ok();
+    }
+    std::fs::create_dir_all(&mount_point).map_err(|e| {
+        RecError::new(
+            ErrorCode::ExtractionFailed,
+            format!("failed to create mount point: {}", e),
+        )
+    })?;
+
+    // Guard ensures cleanup on any exit path
+    let mut guard = MountGuard::new(mount_point.clone());
+
+    // Mount EROFS read-only
+    if !quiet {
+        eprintln!("Mounting EROFS image...");
+    }
+    let mount_status = Command::new("mount")
+        .args(["-t", "erofs", "-o", "ro,loop"])
+        .arg(rootfs)
+        .arg(&mount_point)
+        .status()
+        .map_err(|e| {
+            RecError::new(
+                ErrorCode::ExtractionFailed,
+                format!("failed to run mount: {}", e),
+            )
+        })?;
+
+    if !mount_status.success() {
+        return Err(RecError::new(
+            ErrorCode::ExtractionFailed,
+            format!(
+                "mount failed (exit {}). Is the kernel EROFS module loaded?",
+                mount_status.code().unwrap_or(-1)
+            ),
+        ));
+    }
+
+    // Mark as mounted so guard will unmount on drop
+    guard.set_mounted();
+
+    // Copy all files using cp -aT (preserves permissions, symlinks, etc.)
+    // -a = archive mode (recursive, preserves everything)
+    // -T = treat destination as normal file (copy contents, not subdir)
+    // cp is always available, unlike rsync
+    if !quiet {
+        eprintln!("Copying files from EROFS to target (this may take a while)...");
+    }
+
+    let cp_status = Command::new("cp")
+        .args(["-aT"])
+        .arg(&mount_point)
+        .arg(target)
+        .status()
+        .map_err(|e| {
+            RecError::new(
+                ErrorCode::ExtractionFailed,
+                format!("failed to run cp: {}", e),
+            )
+        })?;
+
+    if !cp_status.success() {
+        return Err(RecError::new(
+            ErrorCode::ExtractionFailed,
+            format!("cp failed (exit {})", cp_status.code().unwrap_or(-1)),
+        ));
+    }
+
+    if !quiet {
+        eprintln!("Extraction complete, cleaning up...");
+    }
+
+    // Guard drop will handle unmount and cleanup
+    Ok(())
+}
+
+/// Extract squashfs image using unsquashfs.
+fn extract_squashfs(rootfs: &Path, target: &Path) -> Result<()> {
+    // -f tells unsquashfs to overwrite existing files (safe: we checked empty or --force)
+    // -d specifies destination directory
+    let status = Command::new("unsquashfs")
+        .args(["-f", "-d"])
+        .arg(target)
+        .arg(rootfs)
+        .stdin(Stdio::null())
+        .status()
+        .map_err(|e| {
+            RecError::new(
+                ErrorCode::ExtractionFailed,
+                format!("failed to run unsquashfs: {}", e),
+            )
+        })?;
+
+    guarded_ensure!(
+        status.success(),
+        RecError::extraction_failed(&format!(
+            "unsquashfs exit code {}",
+            status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string())
+        )),
+        protects = "Extraction actually completed successfully",
+        severity = "CRITICAL",
+        cheats = [
+            "Ignore exit code",
+            "Only check if process ran",
+            "Accept partial extraction",
+            "Retry without reporting failure"
+        ],
+        consequence = "Partially extracted system, missing files, unbootable result"
+    );
+
+    Ok(())
 }
 
 // =============================================================================
@@ -579,18 +901,8 @@ fn run() -> Result<()> {
         consequence = "Extraction fails with permission denied on first file"
     );
 
-    guarded_ensure!(
-        unsquashfs_available(),
-        RecError::unsquashfs_not_installed(),
-        protects = "Required extraction tool is present",
-        severity = "CRITICAL",
-        cheats = [
-            "Hardcode path to unsquashfs",
-            "Use alternative extraction method",
-            "Skip check and hope for the best"
-        ],
-        consequence = "Extraction fails immediately with 'command not found'"
-    );
+    // NOTE: Tool availability (unsquashfs, EROFS support) is checked AFTER
+    // we detect rootfs type - we only need tools for the format we're using.
 
     // =========================================================================
     // PHASE 2: Target Directory Validation
@@ -720,16 +1032,17 @@ fn run() -> Result<()> {
     }
 
     // =========================================================================
-    // PHASE 3: Squashfs Validation
+    // PHASE 3: Rootfs Validation (EROFS or squashfs)
     // =========================================================================
 
-    let squashfs: PathBuf = match &args.squashfs {
+    // --rootfs or --squashfs (alias) - clap handles the alias automatically
+    let rootfs: PathBuf = match args.rootfs.as_ref() {
         Some(path) => {
             let p = Path::new(path);
             guarded_ensure!(
                 p.exists(),
-                RecError::squashfs_not_found(&[path.as_str()]),
-                protects = "Specified squashfs file actually exists",
+                RecError::rootfs_not_found(&[path.as_str()]),
+                protects = "Specified rootfs file actually exists",
                 severity = "CRITICAL",
                 cheats = [
                     "Create empty file",
@@ -741,29 +1054,29 @@ fn run() -> Result<()> {
 
             guarded_ensure!(
                 p.is_file(),
-                RecError::squashfs_not_file(path),
-                protects = "Squashfs path points to a file, not directory",
+                RecError::rootfs_not_file(path),
+                protects = "Rootfs path points to a file, not directory",
                 severity = "CRITICAL",
                 cheats = ["Accept directories", "Skip type check"],
-                consequence = "unsquashfs fails with confusing error about invalid format"
+                consequence = "Extraction fails with confusing error about invalid format"
             );
 
             p.canonicalize()
-                .map_err(|e| RecError::new(ErrorCode::SquashfsNotFound, e.to_string()))?
+                .map_err(|e| RecError::new(ErrorCode::RootfsNotFound, e.to_string()))?
         }
         None => {
-            let found = find_squashfs();
+            let found = find_rootfs();
             guarded_ensure!(
                 found.is_some(),
-                RecError::squashfs_not_found(SQUASHFS_SEARCH_PATHS),
-                protects = "Live ISO squashfs is found automatically",
+                RecError::rootfs_not_found(ROOTFS_SEARCH_PATHS),
+                protects = "Live ISO rootfs is found automatically",
                 severity = "CRITICAL",
                 cheats = [
                     "Return first path without checking existence",
                     "Hardcode a path",
                     "Create empty file at expected location"
                 ],
-                consequence = "User must manually specify --squashfs, poor UX"
+                consequence = "User must manually specify --rootfs, poor UX"
             );
 
             let found = found.unwrap();
@@ -771,24 +1084,33 @@ fn run() -> Result<()> {
 
             guarded_ensure!(
                 p.is_file(),
-                RecError::squashfs_not_file(found),
-                protects = "Auto-detected squashfs is actually a file",
+                RecError::rootfs_not_file(found),
+                protects = "Auto-detected rootfs is actually a file",
                 severity = "CRITICAL",
                 cheats = ["Skip type verification", "Accept any path type"],
-                consequence = "unsquashfs fails with confusing error"
+                consequence = "Extraction fails with confusing error"
             );
 
             p.canonicalize()
-                .map_err(|e| RecError::new(ErrorCode::SquashfsNotFound, e.to_string()))?
+                .map_err(|e| RecError::new(ErrorCode::RootfsNotFound, e.to_string()))?
         }
     };
 
-    let squashfs_str = squashfs.to_string_lossy();
+    let rootfs_str = rootfs.to_string_lossy();
+
+    // Detect rootfs type from extension
+    let rootfs_type = RootfsType::from_path(&rootfs).unwrap_or_else(|| {
+        // Default to squashfs for unknown extensions (backwards compatibility)
+        if !args.quiet {
+            eprintln!("recstrap: warning: unknown rootfs format, assuming squashfs");
+        }
+        RootfsType::Squashfs
+    });
 
     guarded_ensure!(
-        can_read_squashfs(&squashfs),
-        RecError::squashfs_not_readable(&squashfs_str),
-        protects = "Squashfs file is readable before starting extraction",
+        can_read_rootfs(&rootfs),
+        RecError::rootfs_not_readable(&rootfs_str),
+        protects = "Rootfs file is readable before starting extraction",
         severity = "CRITICAL",
         cheats = [
             "Skip readability check",
@@ -799,9 +1121,9 @@ fn run() -> Result<()> {
     );
 
     guarded_ensure!(
-        !is_squashfs_inside_target(&squashfs, &target),
-        RecError::squashfs_inside_target(&squashfs_str, &target_str),
-        protects = "Squashfs is not inside the extraction target",
+        !is_rootfs_inside_target(&rootfs, &target),
+        RecError::rootfs_inside_target(&rootfs_str, &target_str),
+        protects = "Rootfs is not inside the extraction target",
         severity = "CRITICAL",
         cheats = [
             "Skip this check",
@@ -810,6 +1132,47 @@ fn run() -> Result<()> {
         ],
         consequence = "Recursive extraction disaster - extracting overwrites source mid-extraction"
     );
+
+    // =========================================================================
+    // PHASE 4: Format Validation & Tool Availability
+    // =========================================================================
+
+    // Validate magic bytes match expected format
+    if let Err(e) = validate_rootfs_magic(&rootfs, rootfs_type) {
+        return Err(RecError::invalid_rootfs_format(&rootfs_str, &e.to_string()));
+    }
+
+    // Check required tools based on rootfs type
+    match rootfs_type {
+        RootfsType::Erofs => {
+            guarded_ensure!(
+                ensure_erofs_module(),
+                RecError::erofs_not_supported(),
+                protects = "Kernel can mount EROFS filesystems",
+                severity = "CRITICAL",
+                cheats = [
+                    "Skip kernel check",
+                    "Assume module is loaded",
+                    "Silently fall back to squashfs"
+                ],
+                consequence = "Mount fails with cryptic 'unknown filesystem type' error"
+            );
+        }
+        RootfsType::Squashfs => {
+            guarded_ensure!(
+                unsquashfs_available(),
+                RecError::unsquashfs_not_installed(),
+                protects = "Required extraction tool is present",
+                severity = "CRITICAL",
+                cheats = [
+                    "Hardcode path to unsquashfs",
+                    "Use alternative extraction method",
+                    "Skip check and hope for the best"
+                ],
+                consequence = "Extraction fails immediately with 'command not found'"
+            );
+        }
+    }
 
     // =========================================================================
     // PRE-FLIGHT COMPLETE
@@ -824,7 +1187,7 @@ fn run() -> Result<()> {
             eprintln!("{}", "=".repeat(70));
             eprintln!();
             eprintln!("Target:    {}", target_str);
-            eprintln!("Squashfs:  {}", squashfs_str);
+            eprintln!("Rootfs:    {} ({:?})", rootfs_str, rootfs_type);
             eprintln!();
             eprintln!("All {} validation checks passed.", 14);
             eprintln!("Ready to extract. Run without --check to proceed.");
@@ -838,45 +1201,20 @@ fn run() -> Result<()> {
     // =========================================================================
 
     if !args.quiet {
-        eprintln!("Extracting {} to {}...", squashfs_str, target_str);
+        eprintln!("Extracting {} ({:?}) to {}...", rootfs_str, rootfs_type, target_str);
     }
 
-    // Extract squashfs to target
-    // -f tells unsquashfs to overwrite existing files (safe: we checked empty or --force)
-    // -d specifies destination directory
-    // Use status() instead of output() so stderr goes to terminal for progress
-    let status = Command::new("unsquashfs")
-        .args(["-f", "-d"])
-        .arg(&target)
-        .arg(&squashfs)
-        .stdin(Stdio::null())
-        .status()
-        .map_err(|e| {
-            RecError::new(
-                ErrorCode::UnsquashfsFailed,
-                format!("failed to run unsquashfs: {}", e),
-            )
-        })?;
-
-    guarded_ensure!(
-        status.success(),
-        RecError::unsquashfs_failed(&format!(
-            "exit code {}",
-            status
-                .code()
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "signal".to_string())
-        )),
-        protects = "Extraction actually completed successfully",
-        severity = "CRITICAL",
-        cheats = [
-            "Ignore exit code",
-            "Only check if process ran",
-            "Accept partial extraction",
-            "Retry without reporting failure"
-        ],
-        consequence = "Partially extracted system, missing files, unbootable result"
-    );
+    // Extract based on rootfs type
+    match rootfs_type {
+        RootfsType::Erofs => {
+            // EROFS: mount + cp -a + unmount
+            extract_erofs(&rootfs, &target, args.quiet)?;
+        }
+        RootfsType::Squashfs => {
+            // Squashfs: use unsquashfs
+            extract_squashfs(&rootfs, &target)?;
+        }
+    }
 
     // =========================================================================
     // PHASE 5: Post-Extraction Verification
@@ -934,6 +1272,8 @@ mod tests {
         assert_eq!(ErrorCode::SquashfsNotFile.code(), "E013");
         assert_eq!(ErrorCode::SquashfsNotReadable.code(), "E014");
         assert_eq!(ErrorCode::SquashfsInsideTarget.code(), "E015");
+        assert_eq!(ErrorCode::InvalidRootfsFormat.code(), "E016");
+        assert_eq!(ErrorCode::ErofsNotSupported.code(), "E017");
     }
 
     #[test]
@@ -953,6 +1293,8 @@ mod tests {
         assert_eq!(ErrorCode::SquashfsNotFile.exit_code(), 13);
         assert_eq!(ErrorCode::SquashfsNotReadable.exit_code(), 14);
         assert_eq!(ErrorCode::SquashfsInsideTarget.exit_code(), 15);
+        assert_eq!(ErrorCode::InvalidRootfsFormat.exit_code(), 16);
+        assert_eq!(ErrorCode::ErofsNotSupported.exit_code(), 17);
     }
 
     #[test]
@@ -980,11 +1322,11 @@ mod tests {
     }
 
     #[test]
-    fn test_error_squashfs_not_found() {
-        let err = RecError::squashfs_not_found(&["/path/to/squashfs"]);
+    fn test_error_rootfs_not_found() {
+        let err = RecError::squashfs_not_found(&["/path/to/rootfs"]);
         let msg = err.to_string();
         assert!(msg.starts_with("E004:"), "Error was: {}", msg);
-        assert!(msg.contains("squashfs not found"), "Error was: {}", msg);
+        assert!(msg.contains("rootfs not found"), "Error was: {}", msg);
     }
 
     #[test]
@@ -1089,6 +1431,24 @@ mod tests {
     }
 
     #[test]
+    fn test_error_invalid_rootfs_format() {
+        let err = RecError::invalid_rootfs_format("/path/to/file.erofs", "bad magic");
+        let msg = err.to_string();
+        assert!(msg.starts_with("E016:"), "Error was: {}", msg);
+        assert!(msg.contains("not a valid rootfs"), "Error was: {}", msg);
+        assert!(msg.contains("bad magic"), "Error was: {}", msg);
+    }
+
+    #[test]
+    fn test_error_erofs_not_supported() {
+        let err = RecError::erofs_not_supported();
+        let msg = err.to_string();
+        assert!(msg.starts_with("E017:"), "Error was: {}", msg);
+        assert!(msg.contains("EROFS"), "Error was: {}", msg);
+        assert!(msg.contains("modprobe"), "Error was: {}", msg);
+    }
+
+    #[test]
     fn test_all_error_codes_unique() {
         let codes = [
             ErrorCode::TargetNotFound,
@@ -1106,6 +1466,8 @@ mod tests {
             ErrorCode::SquashfsNotFile,
             ErrorCode::SquashfsNotReadable,
             ErrorCode::SquashfsInsideTarget,
+            ErrorCode::InvalidRootfsFormat,
+            ErrorCode::ErofsNotSupported,
         ];
 
         let mut seen = std::collections::HashSet::new();
@@ -1136,6 +1498,8 @@ mod tests {
             ErrorCode::SquashfsNotFile,
             ErrorCode::SquashfsNotReadable,
             ErrorCode::SquashfsInsideTarget,
+            ErrorCode::InvalidRootfsFormat,
+            ErrorCode::ErofsNotSupported,
         ];
 
         let mut seen = std::collections::HashSet::new();
@@ -1158,12 +1522,12 @@ mod tests {
     }
 
     #[test]
-    fn test_squashfs_search_paths_exist() {
-        assert!(!SQUASHFS_SEARCH_PATHS.is_empty());
-        for path in SQUASHFS_SEARCH_PATHS {
+    fn test_rootfs_search_paths_exist() {
+        assert!(!ROOTFS_SEARCH_PATHS.is_empty());
+        for path in ROOTFS_SEARCH_PATHS {
             assert!(
-                path.ends_with(".squashfs"),
-                "Path {} should end with .squashfs",
+                path.ends_with(".erofs") || path.ends_with(".squashfs"),
+                "Path {} should end with .erofs or .squashfs",
                 path
             );
         }
@@ -1209,17 +1573,17 @@ mod tests {
     }
 
     #[test]
-    fn test_squashfs_inside_target_detection() {
-        assert!(is_squashfs_inside_target(
-            Path::new("/mnt/fs.squashfs"),
+    fn test_rootfs_inside_target_detection() {
+        assert!(is_rootfs_inside_target(
+            Path::new("/mnt/fs.erofs"),
             Path::new("/mnt")
         ));
-        assert!(is_squashfs_inside_target(
-            Path::new("/mnt/subdir/fs.squashfs"),
+        assert!(is_rootfs_inside_target(
+            Path::new("/mnt/subdir/fs.erofs"),
             Path::new("/mnt")
         ));
-        assert!(!is_squashfs_inside_target(
-            Path::new("/media/cdrom/fs.squashfs"),
+        assert!(!is_rootfs_inside_target(
+            Path::new("/media/cdrom/fs.erofs"),
             Path::new("/mnt")
         ));
     }
@@ -1227,12 +1591,12 @@ mod tests {
     #[test]
     fn test_can_read_existing_file() {
         // /etc/passwd should be readable
-        assert!(can_read_squashfs(Path::new("/etc/passwd")));
+        assert!(can_read_rootfs(Path::new("/etc/passwd")));
     }
 
     #[test]
     fn test_cannot_read_nonexistent_file() {
-        assert!(!can_read_squashfs(Path::new("/nonexistent/file")));
+        assert!(!can_read_rootfs(Path::new("/nonexistent/file")));
     }
 
     #[test]
@@ -1315,5 +1679,77 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_rootfs_type_from_path() {
+        assert_eq!(
+            RootfsType::from_path(Path::new("/path/to/file.erofs")),
+            Some(RootfsType::Erofs)
+        );
+        assert_eq!(
+            RootfsType::from_path(Path::new("/path/to/file.squashfs")),
+            Some(RootfsType::Squashfs)
+        );
+        assert_eq!(
+            RootfsType::from_path(Path::new("/path/to/file.img")),
+            None
+        );
+        assert_eq!(RootfsType::from_path(Path::new("/path/to/file")), None);
+    }
+
+    #[test]
+    fn test_erofs_magic_constant() {
+        // EROFS magic is 0xe0f5e1e2 (little-endian)
+        assert_eq!(EROFS_MAGIC, 0xe0f5e1e2);
+    }
+
+    #[test]
+    fn test_squashfs_magic_constant() {
+        // Squashfs magic is "hsqs"
+        assert_eq!(SQUASHFS_MAGIC, b"hsqs");
+    }
+
+    #[test]
+    fn test_validate_rootfs_magic_invalid_file() {
+        // Create a temp file with wrong magic at offset 1024
+        // EROFS superblock is at offset 1024, so we need at least 1028 bytes
+        let temp = std::env::temp_dir().join("recstrap_test_badmagic.erofs");
+        let mut data = vec![0u8; 1028];
+        // Put wrong magic at offset 1024
+        data[1024..1028].copy_from_slice(b"NOPE");
+        std::fs::write(&temp, &data).unwrap();
+
+        let result = validate_rootfs_magic(&temp, RootfsType::Erofs);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("not a valid EROFS"),
+            "Error was: {}",
+            err
+        );
+
+        let _ = std::fs::remove_file(&temp);
+    }
+
+    #[test]
+    fn test_validate_rootfs_magic_squashfs_invalid() {
+        // Create a temp file with wrong magic for squashfs
+        let temp = std::env::temp_dir().join("recstrap_test_badsquash.squashfs");
+        std::fs::write(&temp, b"not squashfs").unwrap();
+
+        let result = validate_rootfs_magic(&temp, RootfsType::Squashfs);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("not a valid squashfs"));
+
+        let _ = std::fs::remove_file(&temp);
+    }
+
+    #[test]
+    fn test_erofs_supported_checks_proc_filesystems() {
+        // This test just verifies the function runs without panic
+        // The actual result depends on kernel configuration
+        let _ = erofs_supported();
     }
 }
