@@ -63,8 +63,8 @@ use constants::{MIN_REQUIRED_BYTES, ROOTFS_SEARCH_PATHS};
 use error::{ErrorCode, RecError, Result};
 use helpers::{
     can_read_rootfs, ensure_erofs_module, find_rootfs, get_available_space, is_dir_empty,
-    is_mount_point, is_protected_path, is_root, is_rootfs_inside_target, regenerate_ssh_host_keys,
-    unsquashfs_available,
+    is_mount_point, is_protected_path, is_root, is_rootfs_inside_target, prompt_for_user_creation,
+    regenerate_ssh_host_keys, unsquashfs_available,
 };
 use rootfs::{extract_erofs, extract_squashfs, validate_rootfs_magic, verify_extraction, RootfsType};
 
@@ -474,6 +474,17 @@ fn run() -> Result<()> {
         }
     }
 
+    // =========================================================================
+    // PHASE 8: Optional User Creation Setup
+    // =========================================================================
+
+    // Prompt for initial user creation (Option A: Arch-style)
+    // This creates a setup script in /root that user runs in chroot
+    if !args.quiet && !args.force {
+        // Only prompt if running interactively (not with --force or --quiet)
+        let _ = prompt_for_user_creation(&target);
+    }
+
     if !args.quiet {
         eprintln!();
         eprintln!("Done! Now complete the installation manually:");
@@ -484,14 +495,11 @@ fn run() -> Result<()> {
         eprintln!("  # Chroot into new system");
         eprintln!("  recchroot {}", target_str);
         eprintln!();
-        eprintln!("  # IMPORTANT: Choose ONE of these approaches:");
+        eprintln!("  # Set up initial user (if you created one above)");
+        eprintln!("  bash /root/setup-initial-user.sh");
         eprintln!();
-        eprintln!("  Option A: Unlock root and set password (traditional approach)");
-        eprintln!("    passwd root          # Set new root password (account is locked by default)");
-        eprintln!();
-        eprintln!("  Option B: Create initial user (recommended - use sudo for admin tasks)");
-        eprintln!("    useradd -m -s /bin/bash -G wheel username");
-        eprintln!("    passwd username       # Set user password");
+        eprintln!("  # OR: Set root password manually (account is locked by default)");
+        eprintln!("  passwd root");
         eprintln!();
         eprintln!("  # Install bootloader");
         eprintln!("  bootctl install");

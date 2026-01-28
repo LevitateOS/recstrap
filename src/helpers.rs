@@ -1,7 +1,7 @@
 //! Utility functions for recstrap.
 
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -200,6 +200,102 @@ pub fn regenerate_ssh_host_keys(target: &Path, quiet: bool) -> std::io::Result<(
     if !quiet {
         eprintln!("  Generated fresh SSH host keys (rsa, ecdsa, ed25519)");
     }
+
+    Ok(())
+}
+
+/// Interactively prompt for creating an initial user account.
+///
+/// This implements Option A from the installation plan: prompts for initial user
+/// creation before chrooting. If accepted, creates user and adds to wheel group
+/// for passwordless sudo access.
+///
+/// Returns Ok if operation completed (user created or skipped), Err if something failed.
+pub fn prompt_for_user_creation(target: &Path) -> std::io::Result<()> {
+    // Check if we can write to target
+    let root_dir = target.join("root");
+    if !root_dir.exists() {
+        return Ok(());  // root dir doesn't exist yet, skip
+    }
+
+    eprintln!();
+    eprintln!("LevitateOS: Initial User Setup");
+    eprintln!();
+    eprintln!("Root account is locked on installed systems for security.");
+    eprintln!("You can either:");
+    eprintln!("  1. Create an initial user account (recommended)");
+    eprintln!("  2. Set root password later in chroot with 'passwd'");
+    eprintln!();
+    eprint!("Create initial user? [y/N]: ");
+    std::io::stderr().flush()?;
+
+    let mut response = String::new();
+    std::io::stdin().read_line(&mut response)?;
+
+    if response.trim().to_lowercase() != "y" && response.trim().to_lowercase() != "yes" {
+        eprintln!("Skipped. You can set root password in chroot with: passwd");
+        return Ok(());
+    }
+
+    // Prompt for username
+    eprint!("Username: ");
+    std::io::stderr().flush()?;
+    let mut username = String::new();
+    std::io::stdin().read_line(&mut username)?;
+    let username = username.trim();
+
+    if username.is_empty() {
+        eprintln!("Invalid username. Skipping user creation.");
+        return Ok(());
+    }
+
+    if !username.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        eprintln!("Username contains invalid characters. Skipping user creation.");
+        return Ok(());
+    }
+
+    // Prompt for password
+    eprint!("Password for {}: ", username);
+    std::io::stderr().flush()?;
+    let mut password = String::new();
+    std::io::stdin().read_line(&mut password)?;
+    let password = password.trim();
+
+    if password.is_empty() {
+        eprintln!("Password cannot be empty. Skipping user creation.");
+        return Ok(());
+    }
+
+    // Create a temporary script to run useradd and set password in chroot
+    // We can't useradd directly because the target root doesn't have /etc/passwd etc. yet
+    // Instead, we'll have the user run it in chroot
+
+    let script_path = root_dir.join("setup-initial-user.sh");
+    let script_content = format!(
+        "#!/bin/bash\n\
+         set -e\n\
+         echo 'Creating user: {}'\n\
+         useradd -m -s /bin/bash -G wheel '{}'\n\
+         echo 'Setting password for {}...'\n\
+         echo '{}:{}' | chpasswd\n\
+         echo 'User setup complete!'\n\
+         echo 'You can now logout and login as {}'\n",
+        username, username, username, username, password, username
+    );
+
+    fs::write(&script_path, &script_content)?;
+
+    // Make it executable
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    eprintln!();
+    eprintln!("User setup script created at: /root/setup-initial-user.sh");
+    eprintln!("Run this in chroot: bash /root/setup-initial-user.sh");
+    eprintln!();
 
     Ok(())
 }

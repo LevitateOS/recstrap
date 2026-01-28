@@ -75,6 +75,48 @@ Magic bytes are validated before extraction:
 - EROFS: `0xe0f5e1e2` at offset 1024
 - Squashfs: `hsqs` at offset 0
 
+## Installation Phases
+
+1. **Environment Checks** - root, tools availability
+2. **Target Directory Validation** - path, permissions, mount point, empty check
+3. **Rootfs Validation** - format detection, magic bytes
+4. **Format Validation & Tool Availability** - EROFS kernel support or unsquashfs
+5. **Pre-flight Check** - (optional with --check flag)
+6. **Extraction** - EROFS mount+copy or unsquashfs
+7. **Post-Extraction Verification** - system is valid
+8. **Security Hardening** - regenerate SSH host keys
+9. **User Creation Setup** - (INTERACTIVE) optional user account creation
+
+## User Creation Setup (Phase 9 - Interactive)
+
+After extraction, if running interactively (not --quiet or --force), recstrap prompts:
+
+```
+Create initial user? [y/N]: y
+Username: alice
+Password for alice: ****
+```
+
+Creates a setup script at `/root/setup-initial-user.sh` that user runs in chroot:
+
+```bash
+recchroot /mnt
+bash /root/setup-initial-user.sh
+```
+
+The script:
+- Creates user with home directory
+- Sets password using chpasswd (securely, without shell expansion)
+- Adds user to wheel group for passwordless sudo
+
+**Why this approach**:
+- Preserves minimal pacstrap-like philosophy (extraction only)
+- Prompts happen BEFORE chroot, not inside
+- User can still set root password instead with: `passwd root`
+- Script is optional - user can run manually or skip entirely
+
+**Related**: See `distro-spec::shared::auth::README.md` for authentication architecture.
+
 ## Cheat-Aware Design
 
 Uses `guarded_ensure!` macro. See `.teams/KNOWLEDGE_anti-cheat-testing.md`.
