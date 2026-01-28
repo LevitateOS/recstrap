@@ -484,8 +484,14 @@ fn run() -> Result<()> {
         eprintln!("  # Chroot into new system");
         eprintln!("  recchroot {}", target_str);
         eprintln!();
-        eprintln!("  # Set root password");
-        eprintln!("  passwd");
+        eprintln!("  # IMPORTANT: Choose ONE of these approaches:");
+        eprintln!();
+        eprintln!("  Option A: Unlock root and set password (traditional approach)");
+        eprintln!("    passwd root          # Set new root password (account is locked by default)");
+        eprintln!();
+        eprintln!("  Option B: Create initial user (recommended - use sudo for admin tasks)");
+        eprintln!("    useradd -m -s /bin/bash -G wheel username");
+        eprintln!("    passwd username       # Set user password");
         eprintln!();
         eprintln!("  # Install bootloader");
         eprintln!("  bootctl install");
