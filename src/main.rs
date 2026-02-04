@@ -66,7 +66,9 @@ use helpers::{
     is_mount_point, is_protected_path, is_root, is_rootfs_inside_target, prompt_for_user_creation,
     regenerate_ssh_host_keys, unsquashfs_available,
 };
-use rootfs::{extract_erofs, extract_squashfs, validate_rootfs_magic, verify_extraction, RootfsType};
+use rootfs::{
+    extract_erofs, extract_squashfs, validate_rootfs_magic, verify_extraction, RootfsType,
+};
 
 #[derive(Parser)]
 #[command(name = "recstrap")]
@@ -511,4 +513,3 @@ fn run() -> Result<()> {
 
     Ok(())
 }
-

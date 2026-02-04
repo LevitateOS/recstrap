@@ -278,10 +278,7 @@ mod tests {
             RootfsType::from_path(Path::new("/path/to/file.squashfs")),
             Some(RootfsType::Squashfs)
         );
-        assert_eq!(
-            RootfsType::from_path(Path::new("/path/to/file.img")),
-            None
-        );
+        assert_eq!(RootfsType::from_path(Path::new("/path/to/file.img")), None);
         assert_eq!(RootfsType::from_path(Path::new("/path/to/file")), None);
     }
 

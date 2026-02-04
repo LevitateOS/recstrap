@@ -155,11 +155,7 @@ pub fn regenerate_ssh_host_keys(target: &Path, quiet: bool) -> std::io::Result<(
         return Ok(());
     }
 
-    let key_types = [
-        ("rsa", 3072),
-        ("ecdsa", 256),
-        ("ed25519", 0),
-    ];
+    let key_types = [("rsa", 3072), ("ecdsa", 256), ("ed25519", 0)];
 
     for (key_type, bits) in key_types {
         let key_path = ssh_dir.join(format!("ssh_host_{}_key", key_type));
@@ -171,10 +167,13 @@ pub fn regenerate_ssh_host_keys(target: &Path, quiet: bool) -> std::io::Result<(
 
         // Generate fresh key pair
         let mut cmd = Command::new("ssh-keygen");
-        cmd.arg("-t").arg(key_type)
-            .arg("-f").arg(&key_path)
-            .arg("-N").arg("")  // Empty passphrase
-            .arg("-q");         // Quiet mode
+        cmd.arg("-t")
+            .arg(key_type)
+            .arg("-f")
+            .arg(&key_path)
+            .arg("-N")
+            .arg("") // Empty passphrase
+            .arg("-q"); // Quiet mode
 
         if bits > 0 {
             cmd.arg("-b").arg(bits.to_string());
@@ -215,7 +214,7 @@ pub fn prompt_for_user_creation(target: &Path) -> std::io::Result<()> {
     // Check if we can write to target
     let root_dir = target.join("root");
     if !root_dir.exists() {
-        return Ok(());  // root dir doesn't exist yet, skip
+        return Ok(()); // root dir doesn't exist yet, skip
     }
 
     eprintln!();
@@ -249,7 +248,10 @@ pub fn prompt_for_user_creation(target: &Path) -> std::io::Result<()> {
         return Ok(());
     }
 
-    if !username.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+    if !username
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    {
         eprintln!("Username contains invalid characters. Skipping user creation.");
         return Ok(());
     }
