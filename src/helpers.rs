@@ -181,18 +181,18 @@ pub fn regenerate_ssh_host_keys(target: &Path, quiet: bool) -> std::io::Result<(
 
         let status = cmd.status()?;
         if !status.success() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("ssh-keygen failed for {} key", key_type),
-            ));
+            return Err(std::io::Error::other(format!(
+                "ssh-keygen failed for {} key",
+                key_type
+            )));
         }
 
         // Verify both files were created
         if !key_path.exists() || !pub_key_path.exists() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("SSH {} key pair not created", key_type),
-            ));
+            return Err(std::io::Error::other(format!(
+                "SSH {} key pair not created",
+                key_type
+            )));
         }
     }
 
