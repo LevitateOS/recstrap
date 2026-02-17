@@ -5,8 +5,13 @@
 
 // Re-export from distro-spec (single source of truth)
 pub use distro_spec::shared::{
-    EROFS_MAGIC, ESSENTIAL_DIRS, MIN_REQUIRED_BYTES, ROOTFS_SEARCH_PATHS, SQUASHFS_MAGIC,
+    EROFS_MAGIC, ESSENTIAL_DIRS, MIN_REQUIRED_BYTES, ROOTFS_SEARCH_PATHS,
 };
+
+/// Squashfs magic bytes at offset 0.
+///
+/// Kept local for recstrap backward compatibility during transitional media support.
+pub const SQUASHFS_MAGIC: &[u8; 4] = b"hsqs";
 
 // Note: EROFS_MAGIC_OFFSET is also available from distro_spec::shared if needed.
 
