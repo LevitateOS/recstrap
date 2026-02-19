@@ -349,7 +349,7 @@ mod tests {
             Path::new("/mnt")
         ));
         assert!(!is_rootfs_inside_target(
-            Path::new("/media/cdrom/fs.erofs"),
+            Path::new("/run/live-media/fs.erofs"),
             Path::new("/mnt")
         ));
     }
