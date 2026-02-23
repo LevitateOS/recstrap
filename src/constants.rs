@@ -8,11 +8,6 @@ pub use distro_spec::shared::{
     EROFS_MAGIC, ESSENTIAL_DIRS, MIN_REQUIRED_BYTES, ROOTFS_SEARCH_PATHS,
 };
 
-/// Squashfs magic bytes at offset 0.
-///
-/// Kept local for recstrap backward compatibility during transitional media support.
-pub const SQUASHFS_MAGIC: &[u8; 4] = b"hsqs";
-
 // Note: EROFS_MAGIC_OFFSET is also available from distro_spec::shared if needed.
 
 #[cfg(test)]
@@ -33,8 +28,8 @@ mod tests {
         assert!(!ROOTFS_SEARCH_PATHS.is_empty());
         for path in ROOTFS_SEARCH_PATHS {
             assert!(
-                path.ends_with(".erofs") || path.ends_with(".squashfs"),
-                "Path {} should end with .erofs or .squashfs",
+                path.ends_with(".erofs"),
+                "Path {} should end with .erofs",
                 path
             );
         }
@@ -51,11 +46,5 @@ mod tests {
     fn test_erofs_magic_constant() {
         // EROFS magic is 0xe0f5e1e2 (little-endian)
         assert_eq!(EROFS_MAGIC, 0xe0f5e1e2);
-    }
-
-    #[test]
-    fn test_squashfs_magic_constant() {
-        // Squashfs magic is "hsqs"
-        assert_eq!(SQUASHFS_MAGIC, b"hsqs");
     }
 }

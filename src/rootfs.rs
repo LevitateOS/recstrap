@@ -3,9 +3,9 @@
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
-use crate::constants::{EROFS_MAGIC, ESSENTIAL_DIRS, SQUASHFS_MAGIC};
+use crate::constants::{EROFS_MAGIC, ESSENTIAL_DIRS};
 use crate::error::{ErrorCode, RecError, Result};
 use crate::guarded_ensure;
 
@@ -13,14 +13,12 @@ use crate::guarded_ensure;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RootfsType {
     Erofs,
-    Squashfs,
 }
 
 impl RootfsType {
     pub fn from_path(path: &Path) -> Option<Self> {
         match path.extension().and_then(|e| e.to_str()) {
             Some("erofs") => Some(Self::Erofs),
-            Some("squashfs") => Some(Self::Squashfs),
             _ => None,
         }
     }
@@ -31,36 +29,20 @@ impl RootfsType {
 pub fn validate_rootfs_magic(path: &Path, expected: RootfsType) -> std::io::Result<()> {
     let mut f = File::open(path)?;
 
-    match expected {
-        RootfsType::Erofs => {
-            // EROFS superblock is at offset 1024, magic is first 4 bytes
-            f.seek(SeekFrom::Start(1024))?;
-            let mut buf = [0u8; 4];
-            f.read_exact(&mut buf)?;
-            let magic = u32::from_le_bytes(buf);
-            if magic != EROFS_MAGIC {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "not a valid EROFS image (magic: 0x{:08x}, expected: 0x{:08x})",
-                        magic, EROFS_MAGIC
-                    ),
-                ));
-            }
-        }
-        RootfsType::Squashfs => {
-            // Squashfs magic is at offset 0
-            let mut buf = [0u8; 4];
-            f.read_exact(&mut buf)?;
-            if &buf != SQUASHFS_MAGIC {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "not a valid squashfs image (magic: {:?}, expected: {:?})",
-                        buf, SQUASHFS_MAGIC
-                    ),
-                ));
-            }
+    if expected == RootfsType::Erofs {
+        // EROFS superblock is at offset 1024, magic is first 4 bytes
+        f.seek(SeekFrom::Start(1024))?;
+        let mut buf = [0u8; 4];
+        f.read_exact(&mut buf)?;
+        let magic = u32::from_le_bytes(buf);
+        if magic != EROFS_MAGIC {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "not a valid EROFS image (magic: 0x{:08x}, expected: 0x{:08x})",
+                    magic, EROFS_MAGIC
+                ),
+            ));
         }
     }
 
@@ -185,46 +167,6 @@ pub fn extract_erofs(rootfs: &Path, target: &Path, quiet: bool) -> Result<()> {
     Ok(())
 }
 
-/// Extract squashfs image using unsquashfs.
-pub fn extract_squashfs(rootfs: &Path, target: &Path) -> Result<()> {
-    // -f tells unsquashfs to overwrite existing files (safe: we checked empty or --force)
-    // -d specifies destination directory
-    let status = Command::new("unsquashfs")
-        .args(["-f", "-d"])
-        .arg(target)
-        .arg(rootfs)
-        .stdin(Stdio::null())
-        .status()
-        .map_err(|e| {
-            RecError::new(
-                ErrorCode::ExtractionFailed,
-                format!("failed to run unsquashfs: {}", e),
-            )
-        })?;
-
-    guarded_ensure!(
-        status.success(),
-        RecError::extraction_failed(&format!(
-            "unsquashfs exit code {}",
-            status
-                .code()
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "signal".to_string())
-        )),
-        protects = "Extraction actually completed successfully",
-        severity = "CRITICAL",
-        cheats = [
-            "Ignore exit code",
-            "Only check if process ran",
-            "Accept partial extraction",
-            "Retry without reporting failure"
-        ],
-        consequence = "Partially extracted system, missing files, unbootable result"
-    );
-
-    Ok(())
-}
-
 /// Verify that essential directories exist after extraction.
 /// These directories are required for a functioning Linux system.
 ///
@@ -276,7 +218,7 @@ mod tests {
         );
         assert_eq!(
             RootfsType::from_path(Path::new("/path/to/file.squashfs")),
-            Some(RootfsType::Squashfs)
+            None
         );
         assert_eq!(RootfsType::from_path(Path::new("/path/to/file.img")), None);
         assert_eq!(RootfsType::from_path(Path::new("/path/to/file")), None);
@@ -300,20 +242,6 @@ mod tests {
             "Error was: {}",
             err
         );
-
-        let _ = fs::remove_file(&temp);
-    }
-
-    #[test]
-    fn test_validate_rootfs_magic_squashfs_invalid() {
-        // Create a temp file with wrong magic for squashfs
-        let temp = std::env::temp_dir().join("recstrap_test_badsquash.squashfs");
-        fs::write(&temp, b"not squashfs").unwrap();
-
-        let result = validate_rootfs_magic(&temp, RootfsType::Squashfs);
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("not a valid squashfs"));
 
         let _ = fs::remove_file(&temp);
     }

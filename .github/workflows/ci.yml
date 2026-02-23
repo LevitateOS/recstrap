@@ -29,12 +29,12 @@ jobs:
     uses: LevitateOS/LevitateOS/.github/workflows/rust-ci.yml@master
     with:
       msrv: '1.93'
-      extra-apt-packages: 'squashfs-tools'
+      extra-apt-packages: 'erofs-utils'
       smoke-test-script: |
         ./target/debug/recstrap --help
         ./target/debug/recstrap --version
         ./target/debug/recstrap /nonexistent 2>&1 | grep -q "E008"
-        which unsquashfs
+        which mkfs.erofs
 
   # Project-specific E2E tests that can't be abstracted
   e2e-test:
@@ -45,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y squashfs-tools
+      - run: sudo apt-get update && sudo apt-get install -y erofs-utils
       - run: cargo build --release
 
       - name: End-to-end extraction test
@@ -64,15 +64,15 @@ jobs:
           # Add a symlink (important for real systems)
           ln -s /usr/lib test-root/lib64
 
-          # Create squashfs image
-          mksquashfs test-root test.squashfs -noappend -quiet
-          ls -la test.squashfs
+          # Create EROFS image (output first, source second)
+          mkfs.erofs -T0 test.erofs test-root
+          ls -la test.erofs
 
           # Create target directory
           mkdir -p /tmp/recstrap-test-target
 
           # Run recstrap (with sudo for root, --force to skip mount point check)
-          sudo ./target/release/recstrap --force --squashfs test.squashfs /tmp/recstrap-test-target
+          sudo ./target/release/recstrap --force --rootfs test.erofs /tmp/recstrap-test-target
 
           # Verify essential directories exist
           test -d /tmp/recstrap-test-target/bin

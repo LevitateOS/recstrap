@@ -21,7 +21,8 @@ pub enum ErrorCode {
     ExtractionFailed = 5,
     /// E006: Extracted system verification failed
     ExtractionVerificationFailed = 6,
-    /// E007: Required tool not installed (unsquashfs, mount, rsync)
+    /// E007: Required tool not installed
+    #[allow(dead_code)]
     ToolNotInstalled = 7,
     /// E008: Must run as root
     NotRoot = 8,
@@ -124,6 +125,7 @@ impl RecError {
         )
     }
 
+    #[allow(dead_code)]
     pub fn extraction_failed(detail: &str) -> Self {
         let detail = if detail.is_empty() {
             "unknown error (check dmesg for details)".to_string()
@@ -146,6 +148,7 @@ impl RecError {
         )
     }
 
+    #[allow(dead_code)]
     pub fn tool_not_installed(tool: &str, package: &str) -> Self {
         Self::new(
             ErrorCode::ToolNotInstalled,
@@ -352,10 +355,10 @@ mod tests {
 
     #[test]
     fn test_error_tool_not_installed() {
-        let err = RecError::tool_not_installed("unsquashfs", "squashfs-tools");
+        let err = RecError::tool_not_installed("mount", "util-linux");
         let msg = err.to_string();
         assert!(msg.starts_with("E007:"), "Error was: {}", msg);
-        assert!(msg.contains("unsquashfs not found"), "Error was: {}", msg);
+        assert!(msg.contains("mount not found"), "Error was: {}", msg);
     }
 
     #[test]

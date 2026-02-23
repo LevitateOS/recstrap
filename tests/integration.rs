@@ -27,10 +27,13 @@ fn test_help_flag() {
     let output = run_recstrap(&["--help"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("squashfs"), "Help should mention squashfs");
     assert!(
-        stdout.contains("--squashfs"),
-        "Help should show squashfs flag"
+        stdout.to_ascii_lowercase().contains("erofs"),
+        "Help should mention EROFS"
+    );
+    assert!(
+        !stdout.contains("--squashfs"),
+        "Help should not expose removed --squashfs flag"
     );
     assert!(
         stdout.contains("<TARGET>") || stdout.contains("TARGET"),
@@ -227,75 +230,75 @@ fn test_protected_path_etc() {
 }
 
 #[test]
-fn test_squashfs_flag_parses() {
-    if !is_root() {
-        return;
-    }
+fn test_legacy_squashfs_flag_rejected() {
     let output = run_recstrap(&["--squashfs", "/nonexistent.squashfs", "/nonexistent"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("E001:"),
-        "--squashfs flag should be recognized, got: {}",
+        stderr.contains("--squashfs"),
+        "Expected clap to reject removed --squashfs flag, got: {}",
         stderr
     );
 }
 
 #[cheat_aware(
-    protects = "Missing squashfs file produces clear error, not silent failure",
+    protects = "Unsupported rootfs formats fail with explicit diagnostics",
     severity = "HIGH",
     ease = "MEDIUM",
-    cheats = ["Return success with empty extraction", "Create empty target dir and call it success"],
-    consequence = "User gets empty system that fails to boot with no explanation",
-    legitimate_change = "Squashfs validation is essential. If the source doesn't exist, \
-        we must fail with a clear error code."
+    cheats = ["Silently treat unknown extensions as valid", "Fall back to legacy squashfs handling"],
+    consequence = "Users can extract wrong media format and get unpredictable failures",
+    legitimate_change = "recstrap is EROFS-only; unsupported formats must fail with E016."
 )]
 #[test]
-fn test_squashfs_not_found() {
+fn test_squashfs_extension_rejected() {
     if !is_root() {
         return;
     }
-    let temp_dir = std::env::temp_dir().join("recstrap_test_squashfs_notfound");
+    let temp_dir = std::env::temp_dir().join("recstrap_test_erofs_only_target");
+    let fake_rootfs = std::env::temp_dir().join("recstrap_test_erofs_only.squashfs");
     let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::remove_file(&fake_rootfs);
     let _ = std::fs::create_dir_all(&temp_dir);
+    let _ = std::fs::write(&fake_rootfs, b"hsqs");
 
     let output = run_recstrap(&[
-        "--force", // Skip mount point check
-        "--squashfs",
-        "/nonexistent/path/test.squashfs",
+        "--force",
+        "--rootfs",
+        fake_rootfs.to_str().unwrap(),
         temp_dir.to_str().unwrap(),
     ]);
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("E004:"),
-        "Expected E004, stderr was: {}",
+        stderr.contains("E016:"),
+        "Expected E016 for unsupported extension, stderr was: {}",
         stderr
     );
     assert_eq!(
         output.status.code(),
-        Some(4),
-        "Exit code should be 4 for E004"
+        Some(16),
+        "Exit code should be 16 for E016"
     );
 
     let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::remove_file(&fake_rootfs);
 }
 
 #[test]
-fn test_squashfs_is_directory() {
+fn test_rootfs_is_directory() {
     if !is_root() {
         return;
     }
-    let temp_dir = std::env::temp_dir().join("recstrap_test_squashfs_dir");
-    let fake_squashfs = std::env::temp_dir().join("recstrap_test_fake_squashfs");
+    let temp_dir = std::env::temp_dir().join("recstrap_test_rootfs_dir");
+    let fake_rootfs_dir = std::env::temp_dir().join("recstrap_test_fake_rootfs_dir");
     let _ = std::fs::remove_dir_all(&temp_dir);
-    let _ = std::fs::remove_dir_all(&fake_squashfs);
+    let _ = std::fs::remove_dir_all(&fake_rootfs_dir);
     let _ = std::fs::create_dir_all(&temp_dir);
-    let _ = std::fs::create_dir_all(&fake_squashfs);
+    let _ = std::fs::create_dir_all(&fake_rootfs_dir);
 
     let output = run_recstrap(&[
         "--force",
-        "--squashfs",
-        fake_squashfs.to_str().unwrap(),
+        "--rootfs",
+        fake_rootfs_dir.to_str().unwrap(),
         temp_dir.to_str().unwrap(),
     ]);
 
@@ -312,7 +315,7 @@ fn test_squashfs_is_directory() {
     );
 
     let _ = std::fs::remove_dir_all(&temp_dir);
-    let _ = std::fs::remove_dir_all(&fake_squashfs);
+    let _ = std::fs::remove_dir_all(&fake_rootfs_dir);
 }
 
 #[cheat_aware(

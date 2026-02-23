@@ -11,17 +11,7 @@ use crate::constants::ROOTFS_SEARCH_PATHS;
 // Re-export from distro-spec (single source of truth)
 pub use distro_spec::shared::{is_mount_point, is_protected_path, is_root};
 
-/// Check if unsquashfs is available (only needed for squashfs)
-pub fn unsquashfs_available() -> bool {
-    Command::new("unsquashfs")
-        .arg("--help")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok()
-}
-
-/// Find rootfs from search paths (prefers EROFS over squashfs)
+/// Find rootfs from canonical EROFS search paths.
 pub fn find_rootfs() -> Option<&'static str> {
     ROOTFS_SEARCH_PATHS
         .iter()

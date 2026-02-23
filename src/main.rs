@@ -1,11 +1,11 @@
 //! recstrap - LevitateOS system extractor
 //!
-//! Like pacstrap for Arch Linux - extracts the rootfs (EROFS or squashfs) to target directory.
+//! Like pacstrap for Arch Linux - extracts the EROFS rootfs to target directory.
 //! User does EVERYTHING else manually (partitioning, formatting, fstab, bootloader).
 //!
 //! Usage:
 //!   recstrap /mnt                    # Extract rootfs to /mnt
-//!   recstrap /mnt --rootfs /path     # Custom rootfs location (EROFS or squashfs)
+//!   recstrap /mnt --rootfs /path     # Custom rootfs location (.erofs)
 //!   recstrap /mnt --force            # Overwrite existing files
 //!   recstrap /mnt --quiet            # Scripting mode (minimal output)
 //!
@@ -34,18 +34,20 @@
 //! | E001 | Target directory does not exist |
 //! | E002 | Target is not a directory |
 //! | E003 | Target directory not writable |
-//! | E004 | Squashfs image not found |
-//! | E005 | unsquashfs command failed |
+//! | E004 | Rootfs image not found |
+//! | E005 | Rootfs extraction command failed |
 //! | E006 | Extracted system verification failed |
-//! | E007 | unsquashfs not installed |
+//! | E007 | Required extraction tool not installed |
 //! | E008 | Must run as root |
 //! | E009 | Target directory not empty (use --force) |
 //! | E010 | Target is a protected system path |
 //! | E011 | Target is not a mount point |
 //! | E012 | Insufficient disk space |
-//! | E013 | Squashfs is not a regular file |
-//! | E014 | Squashfs is not readable |
-//! | E015 | Squashfs is inside target directory |
+//! | E013 | Rootfs is not a regular file |
+//! | E014 | Rootfs is not readable |
+//! | E015 | Rootfs is inside target directory |
+//! | E016 | Rootfs format is invalid |
+//! | E017 | EROFS kernel support is missing |
 
 mod constants;
 mod error;
@@ -64,18 +66,16 @@ use error::{ErrorCode, RecError, Result};
 use helpers::{
     can_read_rootfs, ensure_erofs_module, find_rootfs, get_available_space, is_dir_empty,
     is_mount_point, is_protected_path, is_root, is_rootfs_inside_target, prompt_for_user_creation,
-    regenerate_ssh_host_keys, unsquashfs_available,
+    regenerate_ssh_host_keys,
 };
-use rootfs::{
-    extract_erofs, extract_squashfs, validate_rootfs_magic, verify_extraction, RootfsType,
-};
+use rootfs::{extract_erofs, validate_rootfs_magic, verify_extraction, RootfsType};
 
 #[derive(Parser)]
 #[command(name = "recstrap")]
 #[command(version)]
 #[command(about = "Extract LevitateOS rootfs to target directory (like pacstrap)")]
 #[command(
-    long_about = "Extracts the LevitateOS rootfs image (EROFS or squashfs) to a target directory. \
+    long_about = "Extracts the LevitateOS EROFS rootfs image to a target directory. \
     This is the pacstrap equivalent for LevitateOS - it only extracts files. \
     You must do everything else manually: partitioning, formatting, mounting, \
     fstab generation, bootloader installation, and system configuration."
@@ -85,9 +85,8 @@ struct Args {
     target: String,
 
     /// Rootfs location (auto-detected from common paths if not specified)
-    /// Supports both EROFS (.erofs) and squashfs (.squashfs) formats.
-    /// --squashfs is accepted for backwards compatibility.
-    #[arg(long, visible_alias = "squashfs")]
+    /// Must be an EROFS image ending in `.erofs`.
+    #[arg(long)]
     rootfs: Option<String>,
 
     /// Force extraction even if target is not empty or not a mount point
@@ -133,8 +132,7 @@ fn run() -> Result<()> {
         consequence = "Extraction fails with permission denied on first file"
     );
 
-    // NOTE: Tool availability (unsquashfs, EROFS support) is checked AFTER
-    // we detect rootfs type - we only need tools for the format we're using.
+    // NOTE: EROFS kernel support is checked after we discover/validate rootfs.
 
     // =========================================================================
     // PHASE 2: Target Directory Validation
@@ -264,10 +262,9 @@ fn run() -> Result<()> {
     }
 
     // =========================================================================
-    // PHASE 3: Rootfs Validation (EROFS or squashfs)
+    // PHASE 3: Rootfs Validation (EROFS only)
     // =========================================================================
 
-    // --rootfs or --squashfs (alias) - clap handles the alias automatically
     let rootfs: PathBuf = match args.rootfs.as_ref() {
         Some(path) => {
             let p = Path::new(path);
@@ -330,14 +327,13 @@ fn run() -> Result<()> {
 
     let rootfs_str = rootfs.to_string_lossy();
 
-    // Detect rootfs type from extension
-    let rootfs_type = RootfsType::from_path(&rootfs).unwrap_or_else(|| {
-        // Default to squashfs for unknown extensions (backwards compatibility)
-        if !args.quiet {
-            eprintln!("recstrap: warning: unknown rootfs format, assuming squashfs");
-        }
-        RootfsType::Squashfs
-    });
+    // Detect rootfs type from extension (EROFS only).
+    let rootfs_type = RootfsType::from_path(&rootfs).ok_or_else(|| {
+        RecError::invalid_rootfs_format(
+            &rootfs_str,
+            "expected .erofs extension (squashfs is no longer supported)",
+        )
+    })?;
 
     guarded_ensure!(
         can_read_rootfs(&rootfs),
@@ -374,37 +370,18 @@ fn run() -> Result<()> {
         return Err(RecError::invalid_rootfs_format(&rootfs_str, &e.to_string()));
     }
 
-    // Check required tools based on rootfs type
-    match rootfs_type {
-        RootfsType::Erofs => {
-            guarded_ensure!(
-                ensure_erofs_module(),
-                RecError::erofs_not_supported(),
-                protects = "Kernel can mount EROFS filesystems",
-                severity = "CRITICAL",
-                cheats = [
-                    "Skip kernel check",
-                    "Assume module is loaded",
-                    "Silently fall back to squashfs"
-                ],
-                consequence = "Mount fails with cryptic 'unknown filesystem type' error"
-            );
-        }
-        RootfsType::Squashfs => {
-            guarded_ensure!(
-                unsquashfs_available(),
-                RecError::tool_not_installed("unsquashfs", "squashfs-tools"),
-                protects = "Required extraction tool is present",
-                severity = "CRITICAL",
-                cheats = [
-                    "Hardcode path to unsquashfs",
-                    "Use alternative extraction method",
-                    "Skip check and hope for the best"
-                ],
-                consequence = "Extraction fails immediately with 'command not found'"
-            );
-        }
-    }
+    guarded_ensure!(
+        ensure_erofs_module(),
+        RecError::erofs_not_supported(),
+        protects = "Kernel can mount EROFS filesystems",
+        severity = "CRITICAL",
+        cheats = [
+            "Skip kernel check",
+            "Assume module is loaded",
+            "Silently fall back to unsupported formats"
+        ],
+        consequence = "Mount fails with cryptic 'unknown filesystem type' error"
+    );
 
     // =========================================================================
     // PRE-FLIGHT COMPLETE
@@ -439,17 +416,8 @@ fn run() -> Result<()> {
         );
     }
 
-    // Extract based on rootfs type
-    match rootfs_type {
-        RootfsType::Erofs => {
-            // EROFS: mount + cp -a + unmount
-            extract_erofs(&rootfs, &target, args.quiet)?;
-        }
-        RootfsType::Squashfs => {
-            // Squashfs: use unsquashfs
-            extract_squashfs(&rootfs, &target)?;
-        }
-    }
+    // EROFS extraction path: mount + cp -a + unmount
+    extract_erofs(&rootfs, &target, args.quiet)?;
 
     // =========================================================================
     // PHASE 6: Post-Extraction Verification

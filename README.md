@@ -1,6 +1,6 @@
 # recstrap
 
-Extracts LevitateOS squashfs to a target directory. Like `pacstrap` for Arch - just extraction, nothing else.
+Extracts LevitateOS EROFS rootfs to a target directory. Like `pacstrap` for Arch - just extraction, nothing else.
 
 ## Status
 
@@ -12,8 +12,8 @@ Extracts LevitateOS squashfs to a target directory. Like `pacstrap` for Arch - j
 # Standard use (from live ISO)
 recstrap /mnt
 
-# Custom squashfs location
-recstrap --squashfs /path/to/filesystem.squashfs /mnt
+# Custom EROFS location
+recstrap --rootfs /path/to/filesystem.erofs /mnt
 
 # Pre-flight check only
 recstrap --check /mnt
@@ -25,8 +25,8 @@ recstrap --force /mnt
 ## What recstrap Does
 
 1. Validates target directory (14 checks)
-2. Finds squashfs (auto-detect or `--squashfs`)
-3. Runs `unsquashfs -f -d <target> <squashfs>`
+2. Finds rootfs (auto-detect or `--rootfs`)
+3. Mounts EROFS read-only and copies files into target
 4. Verifies extraction
 
 ## What recstrap Does NOT Do
@@ -45,7 +45,7 @@ This is intentional. Manual install like Arch.
 | # | Check | Override |
 |---|-------|----------|
 | 1 | Root privileges | No |
-| 2 | unsquashfs installed | No |
+| 2 | EROFS kernel support available | No |
 | 3 | Target exists | No |
 | 4 | Target is directory | No |
 | 5 | Path canonicalized | No |
@@ -54,9 +54,9 @@ This is intentional. Manual install like Arch.
 | 8 | Is mount point | `--force` |
 | 9 | Target empty | `--force` |
 | 10 | Sufficient space (2GB) | No |
-| 11 | Squashfs exists | No |
-| 12 | Squashfs is file | No |
-| 13 | Squashfs readable | No |
+| 11 | Rootfs exists | No |
+| 12 | Rootfs is file | No |
+| 13 | Rootfs readable | No |
 | 14 | Not recursive | No |
 
 ## Protected Paths (Cannot Override)
@@ -70,25 +70,27 @@ This is intentional. Manual install like Arch.
 | 1 | Target does not exist |
 | 2 | Target not a directory |
 | 3 | Target not writable |
-| 4 | Squashfs not found |
-| 5 | unsquashfs failed |
+| 4 | Rootfs not found |
+| 5 | Extraction failed |
 | 6 | Verification failed |
-| 7 | unsquashfs not installed |
+| 7 | Required tool missing |
 | 8 | Not root |
 | 9 | Target not empty |
 | 10 | Protected path |
 | 11 | Not a mount point |
 | 12 | Insufficient space |
-| 13 | Squashfs not a file |
-| 14 | Squashfs not readable |
-| 15 | Squashfs inside target |
+| 13 | Rootfs not a file |
+| 14 | Rootfs not readable |
+| 15 | Rootfs inside target |
+| 16 | Invalid rootfs format |
+| 17 | EROFS not supported by kernel |
 
 ## Requirements
 
 - Root privileges
-- `unsquashfs` (squashfs-tools package)
+- EROFS support in the running kernel (`erofs` in `/proc/filesystems`)
 - 2GB free space on target
-- LevitateOS live ISO (or `--squashfs` flag)
+- LevitateOS live ISO (or `--rootfs /path/to/filesystem.erofs`)
 
 ## Building
 

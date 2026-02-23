@@ -4,11 +4,11 @@
 
 LevitateOS system extractor. **Like pacstrap, NOT like archinstall.**
 
-Extracts rootfs (EROFS or squashfs) from live ISO to target directory. That's it. User does everything else manually.
+Extracts EROFS rootfs from live ISO to target directory. That's it. User does everything else manually.
 
 ## What Belongs Here
 
-- Rootfs extraction logic (EROFS and squashfs)
+- Rootfs extraction logic (EROFS)
 - Pre-flight validation (root, paths, space, magic bytes)
 - Error codes and cheat-aware checks
 
@@ -32,9 +32,8 @@ cargo clippy
 ## Usage
 
 ```bash
-recstrap /mnt                    # Extract rootfs to /mnt (auto-detect format)
-recstrap /mnt --rootfs /path     # Custom rootfs location (EROFS or squashfs)
-recstrap /mnt --squashfs /path   # Alias for --rootfs (backwards compat)
+recstrap /mnt                    # Extract rootfs to /mnt (auto-detect .erofs path)
+recstrap /mnt --rootfs /path     # Custom rootfs location (.erofs only)
 recstrap /mnt --force            # Override non-empty/non-mount-point
 recstrap /mnt --check            # Pre-flight validation only
 ```
@@ -68,21 +67,19 @@ recstrap /mnt --check            # Pre-flight validation only
 ## Rootfs Format Detection
 
 - `.erofs` extension → EROFS (mount + cp -aT)
-- `.squashfs` extension → squashfs (unsquashfs)
-- Unknown → assumes squashfs for backwards compatibility
+- Anything else → invalid format (fails with E016)
 
 Magic bytes are validated before extraction:
 - EROFS: `0xe0f5e1e2` at offset 1024
-- Squashfs: `hsqs` at offset 0
 
 ## Installation Phases
 
 1. **Environment Checks** - root, tools availability
 2. **Target Directory Validation** - path, permissions, mount point, empty check
 3. **Rootfs Validation** - format detection, magic bytes
-4. **Format Validation & Tool Availability** - EROFS kernel support or unsquashfs
+4. **Format Validation & Tool Availability** - EROFS kernel support
 5. **Pre-flight Check** - (optional with --check flag)
-6. **Extraction** - EROFS mount+copy or unsquashfs
+6. **Extraction** - EROFS mount+copy
 7. **Post-Extraction Verification** - system is valid
 8. **Security Hardening** - regenerate SSH host keys
 9. **User Creation Setup** - (INTERACTIVE) optional user account creation
