@@ -25,7 +25,7 @@ Extracts EROFS rootfs from live ISO to target directory. That's it. User does ev
 
 ```bash
 cargo build --release    # LTO + strip enabled
-cargo test
+cargo check # Unit tests are prohibited; use focused integration/runtime checks.
 cargo clippy
 ```
 
