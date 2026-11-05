@@ -31,6 +31,7 @@ use nix::sys::signal::{signal, SigHandler, Signal};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitCode};
 
 #[derive(Parser)]
@@ -223,6 +224,65 @@ fn cleanup_mounts(mounted: &[PathBuf]) {
     }
 }
 
+/// Refuse mount targets that are symlinks: joining them onto the chroot root
+/// and mounting would follow the link and could land on a host path.
+fn refuse_symlink(target: &Path) -> Result<()> {
+    match fs::symlink_metadata(target) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(RecError::new(
+            ErrorCode::MountFailed,
+            format!(
+                "refusing to mount over symlink '{}' (it would resolve outside the chroot)",
+                target.display()
+            ),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Bind-mount the host's resolv.conf onto `<root>/etc/resolv.conf`.
+///
+/// Returns the mount target to unmount at cleanup, or `None` when nothing was
+/// mounted (no host file, or the target file is a symlink). A placeholder file
+/// created for the mount is recorded in `created_files` for removal.
+fn bind_host_resolv_conf(root: &Path, created_files: &mut Vec<PathBuf>) -> Result<Option<PathBuf>> {
+    let Ok(host_resolv) = fs::canonicalize("/etc/resolv.conf") else {
+        return Ok(None);
+    };
+
+    let etc = root.join("etc");
+    refuse_symlink(&etc)?;
+    let target = etc.join("resolv.conf");
+
+    match fs::symlink_metadata(&target) {
+        Ok(meta) if meta.file_type().is_symlink() => return Ok(None),
+        Ok(meta) if meta.is_file() => {}
+        Ok(_) => {
+            return Err(RecError::new(
+                ErrorCode::MountFailed,
+                format!("'{}' is not a regular file", target.display()),
+            ))
+        }
+        Err(_) => {
+            if !etc.is_dir() {
+                return Ok(None);
+            }
+            fs::File::create(&target).map_err(|e| RecError::mkdir_failed(&target, e))?;
+            created_files.push(target.clone());
+        }
+    }
+
+    mount(
+        Some(&host_resolv),
+        &target,
+        None::<&str>,
+        MsFlags::MS_BIND,
+        None::<&str>,
+    )
+    .map_err(|e| RecError::mount_failed("/etc/resolv.conf", &target, e))?;
+
+    Ok(Some(target))
+}
+
 // Use is_protected_path from distro-spec (single source of truth)
 use distro_spec::shared::is_protected_path;
 
@@ -274,6 +334,7 @@ fn run() -> Result<u8> {
     let mount_result = (|| -> Result<()> {
         for (src, name) in BIND_MOUNTS {
             let target = chroot_canonical.join(name);
+            refuse_symlink(&target)?;
 
             if !target.exists() {
                 fs::create_dir_all(&target).map_err(|e| RecError::mkdir_failed(&target, e))?;
@@ -287,8 +348,19 @@ fn run() -> Result<u8> {
                 None::<&str>,
             )
             .map_err(|e| RecError::mount_failed(src, &target, e))?;
+            mounted.push(target.clone());
 
-            mounted.push(target);
+            // Recursive binds inherit the host's shared propagation; make them
+            // slaves so mounts and lazy unmounts inside the chroot never
+            // propagate back to the host (same as `mount --make-rslave`).
+            mount(
+                None::<&str>,
+                &target,
+                None::<&str>,
+                MsFlags::MS_SLAVE | MsFlags::MS_REC,
+                None::<&str>,
+            )
+            .map_err(|e| RecError::mount_failed(src, &target, e))?;
         }
         Ok(())
     })();
@@ -307,6 +379,10 @@ fn run() -> Result<u8> {
 
         let rel_path = src.strip_prefix('/').unwrap_or(src);
         let target = chroot_canonical.join(rel_path);
+        if let Err(e) = refuse_symlink(&target) {
+            eprintln!("recchroot: warning: skipping optional mount: {}", e);
+            continue;
+        }
 
         if !target.exists() {
             if let Err(e) = fs::create_dir_all(&target) {
@@ -337,13 +413,15 @@ fn run() -> Result<u8> {
         mounted.push(target);
     }
 
-    // Copy resolv.conf for DNS - warn on failure but continue
-    let resolv_src = Path::new("/etc/resolv.conf");
-    let resolv_dst = chroot_canonical.join("etc/resolv.conf");
-    if resolv_src.exists() {
-        if let Err(e) = fs::copy(resolv_src, &resolv_dst) {
-            eprintln!("recchroot: warning: cannot copy resolv.conf: {}", e);
-        }
+    // Provide host DNS without writing into the target (or through it into
+    // the host): bind-mount the host resolv.conf over the target file for the
+    // session only. A symlinked target resolv.conf is left alone; it resolves
+    // inside the chroot (typically into the bind-mounted /run).
+    let mut created_files: Vec<PathBuf> = Vec::new();
+    match bind_host_resolv_conf(&chroot_canonical, &mut created_files) {
+        Ok(Some(target)) => mounted.push(target),
+        Ok(None) => {}
+        Err(e) => eprintln!("recchroot: warning: DNS not configured: {}", e),
     }
 
     // Determine command to run
@@ -356,15 +434,27 @@ fn run() -> Result<u8> {
         )
     };
 
-    // Run chroot
-    let status = Command::new("chroot")
-        .arg(&chroot_canonical)
-        .arg(cmd)
-        .args(&cmd_args)
-        .status();
+    // Run chroot. The parent keeps ignoring SIGINT/SIGTERM/SIGQUIT so it can
+    // always clean up, but ignored dispositions survive exec, so restore the
+    // defaults in the child or Ctrl-C would not work inside the chroot.
+    let mut chroot_cmd = Command::new("chroot");
+    chroot_cmd.arg(&chroot_canonical).arg(cmd).args(&cmd_args);
+    // SAFETY: only async-signal-safe sigaction calls run between fork and exec.
+    unsafe {
+        chroot_cmd.pre_exec(|| {
+            for sig in [Signal::SIGINT, Signal::SIGTERM, Signal::SIGQUIT] {
+                signal(sig, SigHandler::SigDfl).map_err(std::io::Error::from)?;
+            }
+            Ok(())
+        });
+    }
+    let status = chroot_cmd.status();
 
     // Always cleanup, even if chroot failed
     cleanup_mounts(&mounted);
+    for file in &created_files {
+        let _ = fs::remove_file(file);
+    }
 
     let status = status.map_err(RecError::command_failed)?;
 
