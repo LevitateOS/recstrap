@@ -50,7 +50,11 @@ pub fn validate_rootfs_magic(path: &Path, expected: RootfsType) -> std::io::Resu
 }
 
 /// RAII guard for EROFS mount cleanup.
-/// Ensures unmount and directory removal happen even on panic or interrupt.
+///
+/// Unmounts on drop and removes the (empty) mount directory only after a
+/// successful unmount, so a still-mounted image is never deleted through.
+/// SIGINT/SIGTERM are ignored by recstrap while the guard is live (see
+/// `extract_erofs`), so an interrupt ends the copy and this guard still runs.
 struct MountGuard {
     mount_point: PathBuf,
     mounted: bool,
@@ -72,10 +76,79 @@ impl MountGuard {
 impl Drop for MountGuard {
     fn drop(&mut self) {
         if self.mounted {
-            let _ = Command::new("umount").arg(&self.mount_point).status();
+            let unmounted = Command::new("umount")
+                .arg(&self.mount_point)
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
+            if !unmounted {
+                eprintln!(
+                    "recstrap: warning: failed to unmount '{}'; leaving it in place",
+                    self.mount_point.display()
+                );
+                return;
+            }
         }
-        let _ = fs::remove_dir_all(&self.mount_point);
+        // remove_dir (not remove_dir_all): the directory must be empty now.
+        let _ = fs::remove_dir(&self.mount_point);
     }
+}
+
+/// Restores the previous SIGINT/SIGTERM dispositions when dropped.
+struct IgnoreInterrupts {
+    previous: [(libc::c_int, libc::sighandler_t); 2],
+}
+
+impl IgnoreInterrupts {
+    fn new() -> Self {
+        let mut previous = [(libc::SIGINT, libc::SIG_DFL), (libc::SIGTERM, libc::SIG_DFL)];
+        for (sig, old) in previous.iter_mut() {
+            // SAFETY: installing SIG_IGN has no handler code to be unsafe in.
+            *old = unsafe { libc::signal(*sig, libc::SIG_IGN) };
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for IgnoreInterrupts {
+    fn drop(&mut self) {
+        for (sig, old) in self.previous {
+            // SAFETY: restores the disposition captured in `new`.
+            unsafe {
+                libc::signal(sig, old);
+            }
+        }
+    }
+}
+
+/// Create a fresh, private mount directory (mkdtemp) so concurrent runs never
+/// share one and nothing pre-existing is ever deleted.
+fn create_private_mount_dir() -> Result<PathBuf> {
+    use std::ffi::{CString, OsString};
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let base = if Path::new("/run").is_dir() {
+        PathBuf::from("/run")
+    } else {
+        std::env::temp_dir()
+    };
+    let template = CString::new(base.join("recstrap-erofs.XXXXXX").as_os_str().as_bytes())
+        .map_err(|e| RecError::new(ErrorCode::ExtractionFailed, e.to_string()))?;
+    let mut raw = template.into_bytes_with_nul();
+    // SAFETY: `raw` is a writable NUL-terminated template ending in XXXXXX.
+    let ptr = unsafe { libc::mkdtemp(raw.as_mut_ptr().cast()) };
+    if ptr.is_null() {
+        return Err(RecError::new(
+            ErrorCode::ExtractionFailed,
+            format!(
+                "failed to create mount point under {}: {}",
+                base.display(),
+                std::io::Error::last_os_error()
+            ),
+        ));
+    }
+    raw.pop();
+    Ok(PathBuf::from(OsString::from_vec(raw)))
 }
 
 /// Extract EROFS image by mounting and copying.
@@ -86,19 +159,11 @@ impl Drop for MountGuard {
 ///
 /// Uses a RAII guard to ensure cleanup even on panic/interrupt.
 pub fn extract_erofs(rootfs: &Path, target: &Path, quiet: bool) -> Result<()> {
-    // Create temporary mount point
-    let mount_point = std::env::temp_dir().join("recstrap-erofs-mount");
-    if mount_point.exists() {
-        // Try to unmount if leftover from previous run
-        let _ = Command::new("umount").arg(&mount_point).status();
-        fs::remove_dir_all(&mount_point).ok();
-    }
-    fs::create_dir_all(&mount_point).map_err(|e| {
-        RecError::new(
-            ErrorCode::ExtractionFailed,
-            format!("failed to create mount point: {}", e),
-        )
-    })?;
+    let mount_point = create_private_mount_dir()?;
+
+    // Ignore interrupts in recstrap itself (children get defaults back), so
+    // Ctrl-C stops mount/cp and the guard below still unmounts and cleans up.
+    let _interrupts = IgnoreInterrupts::new();
 
     // Guard ensures cleanup on any exit path
     let mut guard = MountGuard::new(mount_point.clone());
@@ -107,7 +172,7 @@ pub fn extract_erofs(rootfs: &Path, target: &Path, quiet: bool) -> Result<()> {
     if !quiet {
         eprintln!("Mounting EROFS image...");
     }
-    let mount_status = Command::new("mount")
+    let mount_status = with_default_signals(Command::new("mount"))
         .args(["-t", "erofs", "-o", "ro,loop"])
         .arg(rootfs)
         .arg(&mount_point)
@@ -140,7 +205,7 @@ pub fn extract_erofs(rootfs: &Path, target: &Path, quiet: bool) -> Result<()> {
         eprintln!("Copying files from EROFS to target (this may take a while)...");
     }
 
-    let cp_status = Command::new("cp")
+    let cp_status = with_default_signals(Command::new("cp"))
         .args(["-aT"])
         .arg(&mount_point)
         .arg(target)
@@ -165,6 +230,21 @@ pub fn extract_erofs(rootfs: &Path, target: &Path, quiet: bool) -> Result<()> {
 
     // Guard drop will handle unmount and cleanup
     Ok(())
+}
+
+/// Restore default SIGINT/SIGTERM handling in a child (ignored dispositions
+/// would otherwise survive exec and make the child uninterruptible).
+fn with_default_signals(mut cmd: Command) -> Command {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: only async-signal-safe signal() calls run between fork and exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::signal(libc::SIGINT, libc::SIG_DFL);
+            libc::signal(libc::SIGTERM, libc::SIG_DFL);
+            Ok(())
+        });
+    }
+    cmd
 }
 
 /// Verify that essential directories exist after extraction.

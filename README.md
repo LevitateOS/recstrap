@@ -18,13 +18,13 @@ recstrap --rootfs /path/to/filesystem.erofs /mnt
 # Pre-flight check only
 recstrap --check /mnt
 
-# Force (skip mount point + empty checks)
-recstrap --force /mnt
+# Skip the mount point and empty checks (same as --force)
+recstrap --allow-non-mountpoint --allow-nonempty /mnt
 ```
 
 ## What recstrap Does
 
-1. Validates target directory (14 checks)
+1. Validates target directory (15 checks)
 2. Finds rootfs (auto-detect or `--rootfs`)
 3. Mounts EROFS read-only and copies files into target
 4. Verifies extraction
@@ -51,13 +51,14 @@ This is intentional. Manual install like Arch.
 | 5 | Path canonicalized | No |
 | 6 | Not protected path | **Never** |
 | 7 | Target writable | No |
-| 8 | Is mount point | `--force` |
-| 9 | Target empty | `--force` |
-| 10 | Sufficient space (2GB) | No |
-| 11 | Rootfs exists | No |
-| 12 | Rootfs is file | No |
-| 13 | Rootfs readable | No |
-| 14 | Not recursive | No |
+| 8 | Not on the host's root filesystem | `--allow-host-root-fs` (never implied by `--force`) |
+| 9 | Is mount point | `--allow-non-mountpoint` or `--force` |
+| 10 | Target empty | `--allow-nonempty` or `--force` |
+| 11 | Sufficient space (2GB) | No |
+| 12 | Rootfs exists | No |
+| 13 | Rootfs is file | No |
+| 14 | Rootfs readable | No |
+| 15 | Not recursive | No |
 
 ## Protected Paths (Cannot Override)
 

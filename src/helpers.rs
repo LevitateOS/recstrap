@@ -196,10 +196,22 @@ pub fn regenerate_ssh_host_keys(target: &Path, quiet: bool) -> std::io::Result<(
 /// Interactively prompt for creating an initial user account.
 ///
 /// This implements Option A from the installation plan: prompts for initial user
-/// creation before chrooting. If accepted, creates user and adds to wheel group
-/// for passwordless sudo access.
+/// creation before chrooting. If accepted, prepares a script that adds the user
+/// to wheel for administration through the installed distro's privilege tool.
 ///
 /// Returns Ok if operation completed (user created or skipped), Err if something failed.
+/// Portable login name: `[a-z_][a-z0-9_-]*`, at most 32 bytes. This also keeps
+/// the name safe to embed in single quotes and never parsed as an option.
+fn is_valid_username(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    name.len() <= 32
+        && (first.is_ascii_lowercase() || first == '_')
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
 pub fn prompt_for_user_creation(target: &Path) -> std::io::Result<()> {
     // Check if we can write to target
     let root_dir = target.join("root");
@@ -238,50 +250,43 @@ pub fn prompt_for_user_creation(target: &Path) -> std::io::Result<()> {
         return Ok(());
     }
 
-    if !username
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-    {
-        eprintln!("Username contains invalid characters. Skipping user creation.");
+    if !is_valid_username(username) {
+        eprintln!(
+            "Username must match [a-z_][a-z0-9_-]* (max 32 chars). Skipping user creation."
+        );
         return Ok(());
     }
 
-    // Prompt for password
-    eprint!("Password for {}: ", username);
-    std::io::stderr().flush()?;
-    let mut password = String::new();
-    std::io::stdin().read_line(&mut password)?;
-    let password = password.trim();
-
-    if password.is_empty() {
-        eprintln!("Password cannot be empty. Skipping user creation.");
-        return Ok(());
-    }
-
-    // Create a temporary script to run useradd and set password in chroot
-    // We can't useradd directly because the target root doesn't have /etc/passwd etc. yet
-    // Instead, we'll have the user run it in chroot
-
+    // The target has no usable /etc/passwd tooling from here, so write a small
+    // script for the user to run inside the chroot. It never contains the
+    // password: `passwd` prompts for it inside the chroot with echo disabled.
     let script_path = root_dir.join("setup-initial-user.sh");
     let script_content = format!(
-        "#!/bin/bash\n\
-         set -e\n\
-         echo 'Creating user: {}'\n\
-         useradd -m -s /bin/bash -G wheel '{}'\n\
-         echo 'Setting password for {}...'\n\
-         echo '{}:{}' | chpasswd\n\
-         echo 'User setup complete!'\n\
-         echo 'You can now logout and login as {}'\n",
-        username, username, username, username, password, username
+        "#!/bin/sh\n\
+         set -eu\n\
+         echo 'Creating user: {user}'\n\
+         useradd -m -s /bin/bash -G wheel -- '{user}'\n\
+         echo 'Set the password for {user}:'\n\
+         passwd -- '{user}'\n\
+         rm -f -- \"$0\"\n\
+         echo 'User setup complete. You can now log in as {user}.'\n",
+        user = username
     );
 
-    fs::write(&script_path, &script_content)?;
-
-    // Make it executable
-    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o700)
+            .open(&script_path)?;
+        file.write_all(script_content.as_bytes())?;
+    }
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))?;
+        fs::set_permissions(&script_path, fs::Permissions::from_mode(0o700))?;
     }
 
     eprintln!();

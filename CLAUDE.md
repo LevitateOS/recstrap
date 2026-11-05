@@ -34,7 +34,7 @@ cargo clippy
 ```bash
 recstrap /mnt                    # Extract rootfs to /mnt (auto-detect .erofs path)
 recstrap /mnt --rootfs /path     # Custom rootfs location (.erofs only)
-recstrap /mnt --force            # Override non-empty/non-mount-point
+recstrap /mnt --force            # Override non-empty/non-mount-point (not the host-root-fs guard)
 recstrap /mnt --check            # Pre-flight validation only
 ```
 
@@ -51,7 +51,7 @@ recstrap /mnt --check            # Pre-flight validation only
 | E007 | 7 | Required tool not installed |
 | E008 | 8 | Must run as root |
 | E009 | 9 | Target not empty |
-| E010 | 10 | Protected system path |
+| E010 | 10 | Protected system path, or on host root filesystem (override: --allow-host-root-fs) |
 | E011 | 11 | Not a mount point |
 | E012 | 12 | Insufficient space |
 | E013 | 13 | Rootfs is not a file |
@@ -62,7 +62,7 @@ recstrap /mnt --check            # Pre-flight validation only
 
 ## Protected Paths (blocked even with --force)
 
-`/`, `/bin`, `/boot`, `/dev`, `/etc`, `/home`, `/lib`, `/lib64`, `/opt`, `/proc`, `/root`, `/run`, `/sbin`, `/srv`, `/sys`, `/tmp`, `/usr`, `/var`
+`/`, `/bin`, `/boot`, `/boot/efi`, `/dev`, `/efi`, `/etc`, `/home`, `/lib`, `/lib32`, `/lib64`, `/opt`, `/proc`, `/root`, `/run`, `/sbin`, `/srv`, `/sys`, `/tmp`, `/usr`, `/usr/local`, `/var` (matched after resolving symlinks and `..`)
 
 ## Rootfs Format Detection
 
@@ -86,12 +86,11 @@ Magic bytes are validated before extraction:
 
 ## User Creation Setup (Phase 9 - Interactive)
 
-After extraction, if running interactively (not --quiet or --force), recstrap prompts:
+After extraction, if running interactively (stdin is a terminal and not --quiet), recstrap prompts:
 
 ```
 Create initial user? [y/N]: y
 Username: alice
-Password for alice: ****
 ```
 
 Creates a setup script at `/root/setup-initial-user.sh` that user runs in chroot:
@@ -103,12 +102,12 @@ bash /root/setup-initial-user.sh
 
 The script:
 - Creates user with home directory
-- Sets password using chpasswd (securely, without shell expansion)
-- Adds user to wheel group for passwordless sudo
+- Prompts for the password with `passwd` inside the chroot (the password is never written to disk), then deletes itself
+- Adds user to wheel for administration (sudo on Levitate, doas on Acorn; password authentication)
 
 **Why this approach**:
 - Preserves minimal pacstrap-like philosophy (extraction only)
-- Prompts happen BEFORE chroot, not inside
+- The username prompt happens before chroot; the password prompt happens inside it
 - User can still set root password instead with: `passwd root`
 - Script is optional - user can run manually or skip entirely
 

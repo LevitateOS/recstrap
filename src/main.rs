@@ -6,7 +6,7 @@
 //! Usage:
 //!   recstrap /mnt                    # Extract rootfs to /mnt
 //!   recstrap /mnt --rootfs /path     # Custom rootfs location (.erofs)
-//!   recstrap /mnt --force            # Overwrite existing files
+//!   recstrap /mnt --force            # Allow non-empty / non-mount-point target
 //!   recstrap /mnt --quiet            # Scripting mode (minimal output)
 //!
 //! This is NOT archinstall. This is pacstrap.
@@ -40,7 +40,7 @@
 //! | E007 | Required extraction tool not installed |
 //! | E008 | Must run as root |
 //! | E009 | Target directory not empty (use --force) |
-//! | E010 | Target is a protected system path |
+//! | E010 | Target is a protected path or on the host root filesystem |
 //! | E011 | Target is not a mount point |
 //! | E012 | Insufficient disk space |
 //! | E013 | Rootfs is not a regular file |
@@ -58,6 +58,7 @@ mod validation;
 use clap::Parser;
 use distro_spec::shared::error::ToolErrorCode;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -89,9 +90,22 @@ struct Args {
     #[arg(long)]
     rootfs: Option<String>,
 
-    /// Force extraction even if target is not empty or not a mount point
+    /// Shorthand for --allow-non-mountpoint --allow-nonempty
     #[arg(short, long)]
     force: bool,
+
+    /// Allow a target directory that is not a mount point
+    #[arg(long)]
+    allow_non_mountpoint: bool,
+
+    /// Allow a target directory that already contains files
+    #[arg(long)]
+    allow_nonempty: bool,
+
+    /// Allow extracting onto the filesystem that holds the running system's /
+    /// (never implied by --force)
+    #[arg(long)]
+    allow_host_root_fs: bool,
 
     /// Quiet mode - minimal output for scripting
     #[arg(short, long)]
@@ -100,6 +114,15 @@ struct Args {
     /// Check mode - run pre-flight validation only, don't extract
     #[arg(short, long)]
     check: bool,
+}
+
+/// True when `path` lives on the same filesystem as the running system's `/`.
+fn is_on_host_root_fs(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (fs::metadata(path), fs::metadata("/")) {
+        (Ok(target), Ok(root)) => target.dev() == root.dev(),
+        _ => false,
+    }
 }
 
 fn main() -> ExitCode {
@@ -206,8 +229,34 @@ fn run() -> Result<()> {
         consequence = "Extraction starts, partially completes, then fails - corrupted state"
     );
 
-    // Mount point check (unless --force)
-    if !args.force {
+    // Never extract onto the running system's root filesystem unless that
+    // is asked for by name: `--force /home/user` would otherwise copy a whole
+    // rootfs over live data.
+    if !args.allow_host_root_fs {
+        guarded_ensure!(
+            !is_on_host_root_fs(&target),
+            RecError::new(
+                ErrorCode::ProtectedPath,
+                format!(
+                    "'{}' is on the host's root filesystem (mount the target partition, or pass --allow-host-root-fs)",
+                    target_str
+                ),
+            ),
+            protects = "The running system's root filesystem is never overwritten by --force",
+            severity = "CRITICAL",
+            cheats = [
+                "Let --force imply --allow-host-root-fs",
+                "Compare paths instead of device IDs"
+            ],
+            consequence = "A rootfs is copied over live host directories such as a home directory"
+        );
+    }
+
+    let allow_non_mountpoint = args.force || args.allow_non_mountpoint;
+    let allow_nonempty = args.force || args.allow_nonempty;
+
+    // Mount point check (unless --allow-non-mountpoint / --force)
+    if !allow_non_mountpoint {
         let is_mp = is_mount_point(&target).unwrap_or(false);
         guarded_ensure!(
             is_mp,
@@ -223,8 +272,8 @@ fn run() -> Result<()> {
         );
     }
 
-    // Empty check (unless --force)
-    if !args.force {
+    // Empty check (unless --allow-nonempty / --force)
+    if !allow_nonempty {
         let is_empty = is_dir_empty(&target).unwrap_or(false);
         guarded_ensure!(
             is_empty,
@@ -437,11 +486,10 @@ fn run() -> Result<()> {
         eprintln!("Regenerating SSH host keys...");
     }
     if let Err(e) = regenerate_ssh_host_keys(&target, args.quiet) {
-        // Warning only - not fatal since user can regenerate manually
-        if !args.quiet {
-            eprintln!("recstrap: warning: SSH key regeneration failed: {}", e);
-            eprintln!("         Run 'ssh-keygen -A' in chroot to generate keys manually");
-        }
+        // Not fatal (keys can be regenerated in the chroot), but a security
+        // problem, so it is reported even with --quiet.
+        eprintln!("recstrap: warning: SSH key regeneration failed: {}", e);
+        eprintln!("         Run 'ssh-keygen -A' in chroot to generate keys manually");
     }
 
     // =========================================================================
@@ -450,8 +498,8 @@ fn run() -> Result<()> {
 
     // Prompt for initial user creation (Option A: Arch-style)
     // This creates a setup script in /root that user runs in chroot
-    if !args.quiet && !args.force {
-        // Only prompt if running interactively (not with --force or --quiet)
+    if !args.quiet && std::io::stdin().is_terminal() {
+        // Only prompt when someone can answer (not with --quiet or piped stdin)
         let _ = prompt_for_user_creation(&target);
     }
 

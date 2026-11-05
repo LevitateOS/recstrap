@@ -262,6 +262,7 @@ fn test_squashfs_extension_rejected() {
 
     let output = run_recstrap(&[
         "--force",
+        "--allow-host-root-fs",
         "--rootfs",
         fake_rootfs.to_str().unwrap(),
         temp_dir.to_str().unwrap(),
@@ -297,6 +298,7 @@ fn test_rootfs_is_directory() {
 
     let output = run_recstrap(&[
         "--force",
+        "--allow-host-root-fs",
         "--rootfs",
         fake_rootfs_dir.to_str().unwrap(),
         temp_dir.to_str().unwrap(),
@@ -370,7 +372,7 @@ fn test_force_flag_allows_nonempty() {
     let _ = std::fs::create_dir_all(&temp_dir);
     let _ = std::fs::write(temp_dir.join("test_file"), b"test");
 
-    let output = run_recstrap(&["--force", temp_dir.to_str().unwrap()]);
+    let output = run_recstrap(&["--force", "--allow-host-root-fs", temp_dir.to_str().unwrap()]);
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
