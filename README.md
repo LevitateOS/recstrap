@@ -83,3 +83,9 @@ cargo build --release
 ## License
 
 MIT
+
+CLI integration checks use the real mount table and require Linux with a block-backed root filesystem plus `findmnt`/`blkid`. A command error or empty successful output fails the mount checks.
+
+```bash
+cargo test -p recfstab --test integration
+```

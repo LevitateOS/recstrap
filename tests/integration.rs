@@ -12,6 +12,49 @@ fn run_recfstab(args: &[&str]) -> std::process::Output {
         .expect("Failed to execute recfstab")
 }
 
+/// Validate output from the actual CLI, including a nonempty set of usable entries.
+fn assert_fstab_output(output: &std::process::Output) -> String {
+    assert!(
+        std::path::Path::new("/proc/mounts").is_file(),
+        "recfstab integration requires Linux mount information at /proc/mounts"
+    );
+    assert!(
+        output.status.success(),
+        "recfstab failed: {}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout.clone()).expect("fstab stdout is UTF-8");
+    let entries: Vec<_> = stdout
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    assert!(
+        !entries.is_empty(),
+        "successful recfstab emitted no filesystem or swap entries"
+    );
+    let mut mountpoints = std::collections::HashSet::new();
+    for line in entries {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        assert_eq!(fields.len(), 6, "invalid fstab record: {line}");
+        assert_eq!(fields[4], "0", "invalid dump field: {line}");
+        let pass: u8 = fields[5].parse().expect("numeric fsck pass");
+        assert!(pass <= 2, "invalid fsck pass: {line}");
+        if fields[2] != "swap" {
+            assert!(
+                fields[1].starts_with('/'),
+                "mountpoint must be absolute: {line}"
+            );
+            assert!(
+                mountpoints.insert(fields[1]),
+                "duplicate mountpoint: {line}"
+            );
+        }
+    }
+    stdout
+}
+
 // =============================================================================
 // CLI Argument Tests
 // =============================================================================
@@ -87,30 +130,58 @@ fn test_file_instead_of_directory() {
 }
 
 #[test]
+fn test_missing_findmnt_fails_with_actionable_error() {
+    let empty_path = tempfile::tempdir().expect("create empty command search path");
+    let output = Command::new(env!("CARGO_BIN_EXE_recfstab"))
+        .arg("/")
+        .env("PATH", empty_path.path())
+        .output()
+        .expect("execute the real recfstab binary without findmnt available");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        output.stdout.is_empty(),
+        "failed mount lookup emitted a partial fstab"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("E004:") && stderr.contains("findmnt") && stderr.contains("util-linux"),
+        "missing dependency must report the cause and remediation: {stderr}"
+    );
+}
+
+#[test]
 fn test_empty_directory_no_mounts() {
-    // /tmp should exist but have no real filesystem mounts under a random subdir
-    let temp_dir = std::env::temp_dir().join("recfstab_test_empty");
-    let _ = std::fs::create_dir_all(&temp_dir);
-
-    let output = run_recfstab(&[temp_dir.to_str().unwrap()]);
-
-    // Some environments include globally visible swap devices, which can make
-    // this invocation succeed even when the temp directory has no mounts.
-    if !output.status.success() {
+    let temp_dir = tempfile::tempdir().expect("create isolated scan directory");
+    let output = run_recfstab(&[temp_dir.path().to_str().unwrap()]);
+    if output.status.success() {
+        // Global swap partitions may be emitted even when this directory has no mounts.
+        let stdout = assert_fstab_output(&output);
+        for line in stdout
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            assert_eq!(
+                fields[1], "none",
+                "unexpected mount in empty directory: {line}"
+            );
+            assert_eq!(
+                fields[2], "swap",
+                "unexpected filesystem in empty directory: {line}"
+            );
+        }
+    } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
         assert!(
-            stderr.contains("E006:"),
-            "Expected E006, stderr was: {}",
-            stderr
+            output.stdout.is_empty(),
+            "failed scan emitted partial fstab"
         );
         assert!(
-            stderr.contains("no filesystems found"),
-            "stderr was: {}",
-            stderr
+            stderr.contains("E006:") && stderr.contains("no filesystems found"),
+            "expected explicit empty-scan error, got: {stderr}"
         );
     }
-
-    let _ = std::fs::remove_dir(&temp_dir);
 }
 
 // =============================================================================
@@ -130,35 +201,22 @@ fn test_exit_code_failure_on_error() {
 }
 
 // =============================================================================
-// Real Mount Tests (only if /proc/mounts exists)
+// Real Linux mount checks (require /proc/mounts and a block-backed root)
 // =============================================================================
 
 #[test]
 fn test_root_filesystem() {
-    // Running against "/" should find at least the root mount
-    // This only works if we're on a real Linux system with real mounts
-    if !std::path::Path::new("/proc/mounts").exists() {
-        return; // Skip on non-Linux
-    }
-
-    let output = run_recfstab(&["/"]);
-
-    // In containers, "/" might not have real block device mounts (only overlayfs/tmpfs)
-    // which get filtered out. So we only check format IF it succeeds with output.
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if !stdout.is_empty() && !stdout.trim().is_empty() {
-            // If we got output, verify it looks like fstab
-            for line in stdout.lines() {
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                let fields: Vec<&str> = line.split_whitespace().collect();
-                assert_eq!(fields.len(), 6, "fstab line should have 6 fields: {}", line);
-            }
-        }
-    }
-    // Failure is OK in containers - they may have no real block device mounts
+    let stdout = assert_fstab_output(&run_recfstab(&["/"]));
+    let roots: Vec<_> = stdout
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter(|line| line.split_whitespace().nth(1) == Some("/"))
+        .collect();
+    assert_eq!(
+        roots.len(),
+        1,
+        "expected one block-backed root mount; inspect findmnt -rn: {stdout}"
+    );
 }
 
 #[test]
@@ -259,79 +317,32 @@ fn test_conflicting_flags() {
 
 #[test]
 fn test_output_has_comment_lines() {
-    if !std::path::Path::new("/proc/mounts").exists() {
-        return;
-    }
-
-    let output = run_recfstab(&["/"]);
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // Each entry should have a comment with the device
-        assert!(
-            stdout.contains("# /dev/") || stdout.contains("# UUID="),
-            "Should have comment lines, got: {}",
-            stdout
-        );
-    }
+    let stdout = assert_fstab_output(&run_recfstab(&["/"]));
+    assert!(
+        stdout.contains("# /dev/") || stdout.contains("# UUID="),
+        "missing device comments in fstab output: {stdout}"
+    );
 }
 
 #[test]
 fn test_output_is_valid_fstab_format() {
-    if !std::path::Path::new("/proc/mounts").exists() {
-        return;
-    }
-
-    let output = run_recfstab(&["/"]);
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        for line in stdout.lines() {
-            // Skip empty lines and comments
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-
-            // Each non-comment line should have 6 whitespace-separated fields
-            let fields: Vec<&str> = line.split_whitespace().collect();
-            assert_eq!(fields.len(), 6, "fstab line should have 6 fields: {}", line);
-
-            // Field 5 (dump) should be 0
-            assert_eq!(fields[4], "0", "dump field should be 0");
-
-            // Field 6 (pass) should be 0, 1, or 2
-            let pass: u8 = fields[5].parse().expect("pass should be a number");
-            assert!(pass <= 2, "pass should be 0, 1, or 2");
-        }
-    }
+    assert_fstab_output(&run_recfstab(&["/"]));
 }
 
 #[test]
 fn test_pseudo_filesystems_excluded() {
-    if !std::path::Path::new("/proc/mounts").exists() {
-        return;
-    }
-
-    let output = run_recfstab(&["/"]);
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        // These pseudo-filesystems should NEVER appear in output
-        let forbidden = ["proc", "sysfs", "devpts", "tmpfs", "cgroup2", "devtmpfs"];
-
-        for line in stdout.lines() {
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let fields: Vec<&str> = line.split_whitespace().collect();
-            if fields.len() >= 3 {
-                let fstype = fields[2];
-                assert!(
-                    !forbidden.contains(&fstype),
-                    "Pseudo-filesystem {} should be excluded, found in: {}",
-                    fstype,
-                    line
-                );
-            }
-        }
+    let stdout = assert_fstab_output(&run_recfstab(&["/"]));
+    let forbidden = [
+        "proc", "sysfs", "devpts", "tmpfs", "cgroup2", "devtmpfs", "overlay",
+    ];
+    for line in stdout
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+    {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        assert!(
+            !forbidden.contains(&fields[2]),
+            "pseudo-filesystem leaked into fstab: {line}"
+        );
     }
 }
