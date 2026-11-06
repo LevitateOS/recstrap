@@ -2,8 +2,6 @@
 //!
 //! These tests run the actual binary and verify behavior.
 //! Target and protected-path checks run unprivileged; nothing here mounts.
-
-use leviso_cheat_test::cheat_aware;
 use std::process::Command;
 
 /// Helper to run recchroot with given args
@@ -54,15 +52,6 @@ fn test_empty_path() {
     );
 }
 
-#[cheat_aware(
-    protects = "Only root can perform chroot operations (security boundary)",
-    severity = "HIGH",
-    ease = "EASY",
-    cheats = ["Remove root check entirely", "Add --no-root-check flag"],
-    consequence = "Unprivileged users attempt chroot and get cryptic permission errors on bind mounts",
-    legitimate_change = "Root requirement is fundamental to chroot. \
-        This check should never be bypassed."
-)]
 #[test]
 fn test_not_root() {
     if distro_spec::shared::is_root() {
@@ -91,15 +80,6 @@ fn test_not_root() {
     );
 }
 
-#[cheat_aware(
-    protects = "User cannot chroot into root filesystem and corrupt running system",
-    severity = "CRITICAL",
-    ease = "EASY",
-    cheats = ["Remove / from protected paths", "Skip protection check when path looks valid"],
-    consequence = "User runs 'recchroot /' and corrupts their running system with bind mounts",
-    legitimate_change = "The root filesystem should NEVER be a valid chroot target. \
-        The list is PROTECTED_PATHS in distro-spec/src/shared/paths.rs."
-)]
 #[test]
 fn test_protected_path_root() {
     // Test that / is protected - E010 should come before E008 now
@@ -117,4 +97,3 @@ fn test_protected_path_root() {
         "E010 should exit with code 10"
     );
 }
-

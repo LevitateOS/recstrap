@@ -18,5 +18,4 @@ libc = "0.2"
 nix = { version = "0.29", features = ["mount", "signal", "user"] }
 
 [dev-dependencies]
-leviso-cheat-test = { path = "../../testing/cheat-test" }
 tempfile = "3"
