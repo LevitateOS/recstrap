@@ -35,7 +35,6 @@ pub mod mount;
 pub mod swap;
 
 use std::collections::HashSet;
-use std::path::Path;
 
 pub use device::{get_device_identifier, IdType};
 use crate::error::{Error, Result};
@@ -52,25 +51,7 @@ pub use swap::{read_swaps, SwapInfo};
 /// * `root_path` - The root directory to scan for mounts
 /// * `id_type` - The identifier type to use (UUID, LABEL, PARTUUID, PARTLABEL)
 pub fn run(root_path: &str, id_type: IdType) -> Result<()> {
-    // Validate input - empty or whitespace-only paths are invalid
-    let root_path = root_path.trim();
-    if root_path.is_empty() {
-        return Err(Error::target_not_found("(empty path)"));
-    }
-
-    let root = Path::new(root_path);
-
-    // Validate root directory
-    if !root.exists() {
-        return Err(Error::target_not_found(root_path));
-    }
-    if !root.is_dir() {
-        return Err(Error::not_a_directory(root_path));
-    }
-
-    // Canonicalize the root path to resolve symlinks
-    // This ensures we match mount targets correctly even if root is a symlink
-    let canonical_root = std::fs::canonicalize(root).map_err(|e| Error::path_unresolvable(root_path, e))?;
+    let canonical_root = crate::session::resolve_target(root_path)?;
     let root_str = canonical_root.to_string_lossy().to_string();
 
     // Remove trailing slash for consistent comparison, but keep "/" as-is
