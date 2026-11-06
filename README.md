@@ -64,7 +64,8 @@ This is intentional. Manual install like Arch.
 
 ## Protected Paths (Cannot Override)
 
-`/`, `/bin`, `/boot`, `/dev`, `/etc`, `/home`, `/lib`, `/lib64`, `/opt`, `/proc`, `/root`, `/run`, `/sbin`, `/srv`, `/sys`, `/tmp`, `/usr`, `/var`
+The host system directories recstrap refuses as a target are `PROTECTED_PATHS`
+in `distro-spec/src/shared/paths.rs`.
 
 ## Error Codes
 
@@ -85,4 +86,4 @@ cargo build --release
 
 ## License
 
-MIT
+MIT OR Apache-2.0

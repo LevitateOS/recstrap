@@ -74,7 +74,7 @@ cargo build --release
 
 ## License
 
-MIT
+MIT OR Apache-2.0
 
 CLI integration checks use the real mount table and require Linux with a block-backed root filesystem plus `findmnt`/`blkid`. A command error or empty successful output fails the mount checks.
 

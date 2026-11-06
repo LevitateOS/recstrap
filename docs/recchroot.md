@@ -28,7 +28,7 @@ recchroot /mnt bootctl install
 
 1. Bind mounts `/proc`, `/sys`, `/dev`, `/run`
 2. Bind mounts `/sys/firmware/efi/efivars` (if UEFI)
-3. Copies `/etc/resolv.conf` for DNS
+3. Bind-mounts the host `/etc/resolv.conf` over the target's for DNS
 4. Runs `chroot <target> <command>`
 5. Unmounts everything on exit
 
@@ -45,9 +45,8 @@ Every failure prints an `E0NN` code; the number is also the exit status. The cod
 
 ## Protected Paths
 
-Cannot chroot into:
-
-`/`, `/bin`, `/boot`, `/dev`, `/etc`, `/home`, `/lib`, `/lib64`, `/opt`, `/proc`, `/root`, `/run`, `/sbin`, `/srv`, `/sys`, `/tmp`, `/usr`, `/var`
+The host system directories recchroot refuses are `PROTECTED_PATHS` in
+`distro-spec/src/shared/paths.rs`.
 
 ## Requirements
 
@@ -63,4 +62,4 @@ cargo build --release
 
 ## License
 
-MIT
+MIT OR Apache-2.0
