@@ -1,6 +1,6 @@
 //! Mount point parsing from findmnt output.
 
-use super::error::{RecfstabError, Result};
+use crate::error::{Error, Result};
 use std::process::Command;
 
 /// Represents a single mount point from findmnt output.
@@ -17,11 +17,11 @@ pub fn get_mounts() -> Result<Vec<MountInfo>> {
     let output = Command::new("findmnt")
         .args(["-rn", "-o", "TARGET,SOURCE,FSTYPE,OPTIONS"])
         .output()
-        .map_err(RecfstabError::findmnt_not_found)?;
+        .map_err(|e| Error::tool_missing("findmnt", "util-linux", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(RecfstabError::findmnt_failed(&stderr));
+        return Err(Error::tool_failed("findmnt", &stderr));
     }
 
     let mounts_str = String::from_utf8_lossy(&output.stdout);

@@ -50,20 +50,18 @@
 //! | E017 | EROFS kernel support is missing |
 
 mod constants;
-mod error;
 mod helpers;
 mod rootfs;
 mod validation;
 
 use clap::Parser;
-use distro_spec::shared::error::ToolErrorCode;
 use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use constants::{MIN_REQUIRED_BYTES, ROOTFS_SEARCH_PATHS};
-use error::{ErrorCode, RecError, Result};
+use install_tools::error::{Error, Result};
 use helpers::{
     can_read_rootfs, ensure_erofs_module, find_rootfs, get_available_space, is_dir_empty,
     is_mount_point, is_protected_path, is_root, is_rootfs_inside_target, prompt_for_user_creation,
@@ -130,7 +128,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("recstrap: {}", e);
-            ExitCode::from(e.code.exit_code())
+            ExitCode::from(e.code.exit_status())
         }
     }
 }
@@ -144,7 +142,7 @@ fn run() -> Result<()> {
 
     guarded_ensure!(
         is_root(),
-        RecError::not_root(),
+        Error::not_root(),
         protects = "Installation runs with sufficient privileges",
         severity = "CRITICAL",
         cheats = [
@@ -165,7 +163,7 @@ fn run() -> Result<()> {
 
     guarded_ensure!(
         target.exists(),
-        RecError::target_not_found(&args.target),
+        Error::target_not_found(&args.target),
         protects = "Target directory exists before we try to use it",
         severity = "CRITICAL",
         cheats = [
@@ -178,7 +176,7 @@ fn run() -> Result<()> {
 
     guarded_ensure!(
         target.is_dir(),
-        RecError::not_a_directory(&args.target),
+        Error::not_a_directory(&args.target),
         protects = "Target is a directory, not a file or device",
         severity = "CRITICAL",
         cheats = [
@@ -192,12 +190,12 @@ fn run() -> Result<()> {
     // Canonicalize path to resolve symlinks and ..
     let target = target
         .canonicalize()
-        .map_err(|e| RecError::new(ErrorCode::TargetNotFound, e.to_string()))?;
+        .map_err(|e| Error::path_unresolvable(&args.target, e))?;
     let target_str = target.to_string_lossy();
 
     guarded_ensure!(
         !is_protected_path(&target),
-        RecError::protected_path(&target_str),
+        Error::protected_path(&target_str),
         protects = "Critical system directories are never overwritten",
         severity = "CRITICAL",
         cheats = [
@@ -218,7 +216,7 @@ fn run() -> Result<()> {
 
     guarded_ensure!(
         can_write,
-        RecError::not_writable(&target_str),
+        Error::not_writable(&target_str),
         protects = "We can actually write to the target before starting extraction",
         severity = "CRITICAL",
         cheats = [
@@ -235,13 +233,7 @@ fn run() -> Result<()> {
     if !args.allow_host_root_fs {
         guarded_ensure!(
             !is_on_host_root_fs(&target),
-            RecError::new(
-                ErrorCode::ProtectedPath,
-                format!(
-                    "'{}' is on the host's root filesystem (mount the target partition, or pass --allow-host-root-fs)",
-                    target_str
-                ),
-            ),
+            Error::on_host_root_filesystem(&target_str),
             protects = "The running system's root filesystem is never overwritten by --force",
             severity = "CRITICAL",
             cheats = [
@@ -260,7 +252,7 @@ fn run() -> Result<()> {
         let is_mp = is_mount_point(&target).unwrap_or(false);
         guarded_ensure!(
             is_mp,
-            RecError::not_mount_point(&target_str),
+            Error::not_mount_point(&target_str),
             protects = "User has actually mounted a filesystem for installation",
             severity = "HIGH",
             cheats = [
@@ -277,7 +269,7 @@ fn run() -> Result<()> {
         let is_empty = is_dir_empty(&target).unwrap_or(false);
         guarded_ensure!(
             is_empty,
-            RecError::target_not_empty(&target_str),
+            Error::target_not_empty(&target_str),
             protects = "User doesn't accidentally overwrite existing data",
             severity = "HIGH",
             cheats = [
@@ -293,7 +285,7 @@ fn run() -> Result<()> {
     if let Ok(available) = get_available_space(&target) {
         guarded_ensure!(
             available >= MIN_REQUIRED_BYTES,
-            RecError::insufficient_space(
+            Error::insufficient_space(
                 MIN_REQUIRED_BYTES / (1024 * 1024),
                 available / (1024 * 1024)
             ),
@@ -319,7 +311,7 @@ fn run() -> Result<()> {
             let p = Path::new(path);
             guarded_ensure!(
                 p.exists(),
-                RecError::rootfs_not_found(&[path.as_str()]),
+                Error::rootfs_not_found(&[path.as_str()]),
                 protects = "Specified rootfs file actually exists",
                 severity = "CRITICAL",
                 cheats = [
@@ -332,7 +324,7 @@ fn run() -> Result<()> {
 
             guarded_ensure!(
                 p.is_file(),
-                RecError::rootfs_not_file(path),
+                Error::rootfs_not_file(path),
                 protects = "Rootfs path points to a file, not directory",
                 severity = "CRITICAL",
                 cheats = ["Accept directories", "Skip type check"],
@@ -340,13 +332,13 @@ fn run() -> Result<()> {
             );
 
             p.canonicalize()
-                .map_err(|e| RecError::new(ErrorCode::RootfsNotFound, e.to_string()))?
+                .map_err(|e| Error::path_unresolvable(path, e))?
         }
         None => {
             let found = find_rootfs();
             guarded_ensure!(
                 found.is_some(),
-                RecError::rootfs_not_found(ROOTFS_SEARCH_PATHS),
+                Error::rootfs_not_found(ROOTFS_SEARCH_PATHS),
                 protects = "Live ISO rootfs is found automatically",
                 severity = "CRITICAL",
                 cheats = [
@@ -362,7 +354,7 @@ fn run() -> Result<()> {
 
             guarded_ensure!(
                 p.is_file(),
-                RecError::rootfs_not_file(found),
+                Error::rootfs_not_file(found),
                 protects = "Auto-detected rootfs is actually a file",
                 severity = "CRITICAL",
                 cheats = ["Skip type verification", "Accept any path type"],
@@ -370,7 +362,7 @@ fn run() -> Result<()> {
             );
 
             p.canonicalize()
-                .map_err(|e| RecError::new(ErrorCode::RootfsNotFound, e.to_string()))?
+                .map_err(|e| Error::path_unresolvable(found, e))?
         }
     };
 
@@ -378,7 +370,7 @@ fn run() -> Result<()> {
 
     // Detect rootfs type from extension (EROFS only).
     let rootfs_type = RootfsType::from_path(&rootfs).ok_or_else(|| {
-        RecError::invalid_rootfs_format(
+        Error::invalid_rootfs_format(
             &rootfs_str,
             "expected .erofs extension (squashfs is no longer supported)",
         )
@@ -386,7 +378,7 @@ fn run() -> Result<()> {
 
     guarded_ensure!(
         can_read_rootfs(&rootfs),
-        RecError::rootfs_not_readable(&rootfs_str),
+        Error::rootfs_not_readable(&rootfs_str),
         protects = "Rootfs file is readable before starting extraction",
         severity = "CRITICAL",
         cheats = [
@@ -399,7 +391,7 @@ fn run() -> Result<()> {
 
     guarded_ensure!(
         !is_rootfs_inside_target(&rootfs, &target),
-        RecError::rootfs_inside_target(&rootfs_str, &target_str),
+        Error::rootfs_inside_target(&rootfs_str, &target_str),
         protects = "Rootfs is not inside the extraction target",
         severity = "CRITICAL",
         cheats = [
@@ -416,12 +408,12 @@ fn run() -> Result<()> {
 
     // Validate magic bytes match expected format
     if let Err(e) = validate_rootfs_magic(&rootfs, rootfs_type) {
-        return Err(RecError::invalid_rootfs_format(&rootfs_str, &e.to_string()));
+        return Err(Error::invalid_rootfs_format(&rootfs_str, &e.to_string()));
     }
 
     guarded_ensure!(
         ensure_erofs_module(),
-        RecError::erofs_not_supported(),
+        Error::erofs_not_supported(),
         protects = "Kernel can mount EROFS filesystems",
         severity = "CRITICAL",
         cheats = [

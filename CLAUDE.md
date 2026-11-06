@@ -40,25 +40,7 @@ recstrap /mnt --check            # Pre-flight validation only
 
 ## Error Codes
 
-| Code | Exit | Description |
-|------|------|-------------|
-| E001 | 1 | Target does not exist |
-| E002 | 2 | Target is not a directory |
-| E003 | 3 | Target not writable |
-| E004 | 4 | Rootfs not found |
-| E005 | 5 | Extraction failed |
-| E006 | 6 | Verification failed |
-| E007 | 7 | Required tool not installed |
-| E008 | 8 | Must run as root |
-| E009 | 9 | Target not empty |
-| E010 | 10 | Protected system path, or on host root filesystem (override: --allow-host-root-fs) |
-| E011 | 11 | Not a mount point |
-| E012 | 12 | Insufficient space |
-| E013 | 13 | Rootfs is not a file |
-| E014 | 14 | Rootfs not readable |
-| E015 | 15 | Rootfs inside target |
-| E016 | 16 | Invalid rootfs format (bad magic) |
-| E017 | 17 | EROFS not supported by kernel |
+Every failure prints an `E0NN` code; the number is also the exit status. The codes are defined once, in [`src/error.rs`](src/error.rs), and shared by recstrap, recchroot and recfstab.
 
 ## Protected Paths (blocked even with --force)
 

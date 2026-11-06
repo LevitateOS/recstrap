@@ -141,7 +141,7 @@ fn test_path_with_special_characters() {
 }
 
 // =============================================================================
-// Root and Permission Tests (E007, E008)
+// Root and Permission Tests (E008, E010)
 // =============================================================================
 
 #[cheat_aware(
@@ -155,14 +155,14 @@ fn test_path_with_special_characters() {
 )]
 #[test]
 fn test_not_root() {
-    // When not running as root, should fail with E007
+    // When not running as root, should fail with E008
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
     let output = run_recchroot(&[dir.path().to_str().unwrap()]);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("E007:"),
-        "Expected E007 (not root), stderr was: {}",
+        stderr.contains("E008:"),
+        "Expected E008 (not root), stderr was: {}",
         stderr
     );
     assert!(
@@ -173,8 +173,8 @@ fn test_not_root() {
     // Verify exit code is 7
     assert_eq!(
         output.status.code(),
-        Some(7),
-        "Expected exit code 7 for E007"
+        Some(8),
+        "Expected exit code 8 for E008"
     );
 }
 
@@ -189,19 +189,19 @@ fn test_not_root() {
 )]
 #[test]
 fn test_protected_path_root() {
-    // Test that / is protected - E008 should come before E007 now
+    // Test that / is protected - E010 should come before E008 now
     let output = run_recchroot(&["/"]);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("E008:"),
-        "Expected E008 (protected path), stderr was: {}",
+        stderr.contains("E010:"),
+        "Expected E010 (protected path), stderr was: {}",
         stderr
     );
     assert_eq!(
         output.status.code(),
-        Some(8),
-        "E008 should exit with code 8"
+        Some(10),
+        "E010 should exit with code 10"
     );
 }
 
@@ -220,14 +220,14 @@ fn test_protected_path_usr() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("E008:"),
-        "Expected E008 (protected path), stderr was: {}",
+        stderr.contains("E010:"),
+        "Expected E010 (protected path), stderr was: {}",
         stderr
     );
     assert_eq!(
         output.status.code(),
-        Some(8),
-        "E008 should exit with code 8"
+        Some(10),
+        "E010 should exit with code 10"
     );
 }
 

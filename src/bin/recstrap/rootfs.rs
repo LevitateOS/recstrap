@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::constants::{EROFS_MAGIC, ESSENTIAL_DIRS};
-use crate::error::{ErrorCode, RecError, Result};
+use install_tools::error::{Error, Result};
 use crate::guarded_ensure;
 
 /// Rootfs type detected from file extension
@@ -133,14 +133,12 @@ fn create_private_mount_dir() -> Result<PathBuf> {
         std::env::temp_dir()
     };
     let template = CString::new(base.join("recstrap-erofs.XXXXXX").as_os_str().as_bytes())
-        .map_err(|e| RecError::new(ErrorCode::ExtractionFailed, e.to_string()))?;
+        .map_err(Error::extraction_failed)?;
     let mut raw = template.into_bytes_with_nul();
     // SAFETY: `raw` is a writable NUL-terminated template ending in XXXXXX.
     let ptr = unsafe { libc::mkdtemp(raw.as_mut_ptr().cast()) };
     if ptr.is_null() {
-        return Err(RecError::new(
-            ErrorCode::ExtractionFailed,
-            format!(
+        return Err(Error::extraction_failed(format!(
                 "failed to create mount point under {}: {}",
                 base.display(),
                 std::io::Error::last_os_error()
@@ -178,16 +176,12 @@ pub fn extract_erofs(rootfs: &Path, target: &Path, quiet: bool) -> Result<()> {
         .arg(&mount_point)
         .status()
         .map_err(|e| {
-            RecError::new(
-                ErrorCode::ExtractionFailed,
-                format!("failed to run mount: {}", e),
+            Error::extraction_failed(format!("failed to run mount: {}", e),
             )
         })?;
 
     if !mount_status.success() {
-        return Err(RecError::new(
-            ErrorCode::ExtractionFailed,
-            format!(
+        return Err(Error::extraction_failed(format!(
                 "mount failed (exit {}). Is the kernel EROFS module loaded?",
                 mount_status.code().unwrap_or(-1)
             ),
@@ -211,16 +205,12 @@ pub fn extract_erofs(rootfs: &Path, target: &Path, quiet: bool) -> Result<()> {
         .arg(target)
         .status()
         .map_err(|e| {
-            RecError::new(
-                ErrorCode::ExtractionFailed,
-                format!("failed to run cp: {}", e),
+            Error::extraction_failed(format!("failed to run cp: {}", e),
             )
         })?;
 
     if !cp_status.success() {
-        return Err(RecError::new(
-            ErrorCode::ExtractionFailed,
-            format!("cp failed (exit {})", cp_status.code().unwrap_or(-1)),
+        return Err(Error::extraction_failed(format!("cp failed (exit {})", cp_status.code().unwrap_or(-1)),
         ));
     }
 
@@ -270,7 +260,7 @@ pub fn verify_extraction(target: &Path) -> Result<()> {
 
     guarded_ensure!(
         missing.is_empty(),
-        RecError::extraction_verification_failed(&missing),
+        Error::extraction_verification_failed(&missing),
         protects = "Extracted system has all essential directories",
         severity = "CRITICAL",
         cheats = [

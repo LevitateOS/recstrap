@@ -49,7 +49,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("recfstab: {}", e);
-            ExitCode::FAILURE
+            ExitCode::from(e.code.exit_status())
         }
     }
 }

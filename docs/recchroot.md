@@ -39,18 +39,9 @@ recchroot /mnt bootctl install
 - Install bootloader, set passwords, create users
 - Any other installation step
 
-## Exit Codes
+## Error Codes
 
-| Code | Error |
-|------|-------|
-| 1 | Target does not exist |
-| 2 | Not a directory |
-| 3 | Can't create mount point |
-| 4 | Mount failed |
-| 5 | Unmount failed (warning) |
-| 6 | Command failed |
-| 7 | Not root |
-| 8 | Protected path |
+Every failure prints an `E0NN` code; the number is also the exit status. The codes are defined once, in [`src/error.rs`](../src/error.rs), and shared by recstrap, recchroot and recfstab.
 
 ## Protected Paths
 

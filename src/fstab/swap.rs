@@ -1,7 +1,7 @@
 //! Swap partition detection from /proc/swaps.
 
 use super::device::get_device_identifier;
-use super::error::Result;
+use crate::error::Result;
 use super::fstab::escape_fstab;
 use std::fs;
 

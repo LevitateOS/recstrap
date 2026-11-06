@@ -66,27 +66,9 @@ This is intentional. Manual install like Arch.
 
 `/`, `/bin`, `/boot`, `/dev`, `/etc`, `/home`, `/lib`, `/lib64`, `/opt`, `/proc`, `/root`, `/run`, `/sbin`, `/srv`, `/sys`, `/tmp`, `/usr`, `/var`
 
-## Exit Codes
+## Error Codes
 
-| Code | Error |
-|------|-------|
-| 1 | Target does not exist |
-| 2 | Target not a directory |
-| 3 | Target not writable |
-| 4 | Rootfs not found |
-| 5 | Extraction failed |
-| 6 | Verification failed |
-| 7 | Required tool missing |
-| 8 | Not root |
-| 9 | Target not empty |
-| 10 | Protected path |
-| 11 | Not a mount point |
-| 12 | Insufficient space |
-| 13 | Rootfs not a file |
-| 14 | Rootfs not readable |
-| 15 | Rootfs inside target |
-| 16 | Invalid rootfs format |
-| 17 | EROFS not supported by kernel |
+Every failure prints an `E0NN` code; the number is also the exit status. The codes are defined once, in [`src/error.rs`](src/error.rs), and shared by recstrap, recchroot and recfstab.
 
 ## Requirements
 

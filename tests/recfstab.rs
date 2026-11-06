@@ -137,14 +137,14 @@ fn test_missing_findmnt_fails_with_actionable_error() {
         .env("PATH", empty_path.path())
         .output()
         .expect("execute the real recfstab binary without findmnt available");
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(7));
     assert!(
         output.stdout.is_empty(),
         "failed mount lookup emitted a partial fstab"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("E004:") && stderr.contains("findmnt") && stderr.contains("util-linux"),
+        stderr.contains("E007:") && stderr.contains("findmnt") && stderr.contains("util-linux"),
         "missing dependency must report the cause and remediation: {stderr}"
     );
 }
@@ -178,7 +178,7 @@ fn test_empty_directory_no_mounts() {
             "failed scan emitted partial fstab"
         );
         assert!(
-            stderr.contains("E006:") && stderr.contains("no filesystems found"),
+            stderr.contains("E024:") && stderr.contains("no filesystems found"),
             "expected explicit empty-scan error, got: {stderr}"
         );
     }

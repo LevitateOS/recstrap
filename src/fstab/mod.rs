@@ -29,7 +29,6 @@
 //! - Root privileges (for blkid to read device UUIDs)
 
 pub mod device;
-pub mod error;
 pub mod filter;
 pub mod fstab;
 pub mod mount;
@@ -39,7 +38,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 pub use device::{get_device_identifier, IdType};
-pub use error::{ErrorCode, RecfstabError, Result};
+use crate::error::{Error, Result};
 pub use filter::{filter_options, is_pseudo_filesystem, is_under_root};
 pub use fstab::{determine_pass_number, escape_fstab, make_fstab_target};
 pub use mount::{get_mounts, MountInfo};
@@ -56,22 +55,22 @@ pub fn run(root_path: &str, id_type: IdType) -> Result<()> {
     // Validate input - empty or whitespace-only paths are invalid
     let root_path = root_path.trim();
     if root_path.is_empty() {
-        return Err(RecfstabError::root_not_found("(empty path)"));
+        return Err(Error::target_not_found("(empty path)"));
     }
 
     let root = Path::new(root_path);
 
     // Validate root directory
     if !root.exists() {
-        return Err(RecfstabError::root_not_found(root_path));
+        return Err(Error::target_not_found(root_path));
     }
     if !root.is_dir() {
-        return Err(RecfstabError::not_a_directory(root_path));
+        return Err(Error::not_a_directory(root_path));
     }
 
     // Canonicalize the root path to resolve symlinks
     // This ensures we match mount targets correctly even if root is a symlink
-    let canonical_root = std::fs::canonicalize(root).map_err(RecfstabError::current_dir_failed)?;
+    let canonical_root = std::fs::canonicalize(root).map_err(|e| Error::path_unresolvable(root_path, e))?;
     let root_str = canonical_root.to_string_lossy().to_string();
 
     // Remove trailing slash for consistent comparison, but keep "/" as-is
@@ -144,7 +143,7 @@ pub fn run(root_path: &str, id_type: IdType) -> Result<()> {
     }
 
     if !found_any {
-        return Err(RecfstabError::no_filesystems(root_path));
+        return Err(Error::no_filesystems(root_path));
     }
 
     Ok(())

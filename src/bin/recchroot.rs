@@ -8,27 +8,12 @@
 //!   recchroot /mnt passwd       # Run single command
 //!
 //! This is NOT an installer. This enters chroot. That's it.
-//!
-//! ## Error Codes
-//!
-//! | Code | Exit | Description |
-//! |------|------|-------------|
-//! | E001 | 1 | Target directory does not exist |
-//! | E002 | 2 | Target is not a directory |
-//! | E003 | 3 | Failed to create mount point directory |
-//! | E004 | 4 | Mount operation failed |
-//! | E005 | 5 | Unmount operation failed (warning only) |
-//! | E006 | 6 | Command execution failed |
-//! | E007 | 7 | Must run as root |
-//! | E008 | 8 | Target is a protected system path |
 
 use clap::Parser;
-use distro_spec::impl_error_code_display;
-use distro_spec::shared::error::ToolErrorCode;
+use install_tools::error::{Error, Result};
 use distro_spec::shared::is_root;
 use nix::mount::{mount, umount2, MntFlags, MsFlags};
 use nix::sys::signal::{signal, SigHandler, Signal};
-use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::os::unix::process::CommandExt;
@@ -46,138 +31,6 @@ struct Args {
     #[arg(trailing_var_arg = true)]
     command: Vec<String>,
 }
-
-// =============================================================================
-// Error Handling
-// =============================================================================
-
-/// Error codes for recchroot failures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorCode {
-    /// E001: Target directory does not exist
-    TargetNotFound,
-    /// E002: Target is not a directory
-    NotADirectory,
-    /// E003: Failed to create mount point directory
-    MkdirFailed,
-    /// E004: Mount operation failed
-    MountFailed,
-    /// E005: Unmount operation failed
-    UnmountFailed,
-    /// E006: Command execution failed
-    CommandFailed,
-    /// E007: Must run as root
-    NotRoot,
-    /// E008: Target is a protected system path
-    ProtectedPath,
-}
-
-impl ToolErrorCode for ErrorCode {
-    fn code(&self) -> &'static str {
-        match self {
-            ErrorCode::TargetNotFound => "E001",
-            ErrorCode::NotADirectory => "E002",
-            ErrorCode::MkdirFailed => "E003",
-            ErrorCode::MountFailed => "E004",
-            ErrorCode::UnmountFailed => "E005",
-            ErrorCode::CommandFailed => "E006",
-            ErrorCode::NotRoot => "E007",
-            ErrorCode::ProtectedPath => "E008",
-        }
-    }
-
-    fn exit_code(&self) -> u8 {
-        match self {
-            ErrorCode::TargetNotFound => 1,
-            ErrorCode::NotADirectory => 2,
-            ErrorCode::MkdirFailed => 3,
-            ErrorCode::MountFailed => 4,
-            ErrorCode::UnmountFailed => 5,
-            ErrorCode::CommandFailed => 6,
-            ErrorCode::NotRoot => 7,
-            ErrorCode::ProtectedPath => 8,
-        }
-    }
-}
-
-impl_error_code_display!(ErrorCode);
-
-/// A recchroot error with code and context.
-#[derive(Debug)]
-pub struct RecError {
-    pub code: ErrorCode,
-    pub message: String,
-}
-
-impl RecError {
-    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-
-    pub fn target_not_found(path: &str) -> Self {
-        Self::new(
-            ErrorCode::TargetNotFound,
-            format!("target directory '{}' does not exist", path),
-        )
-    }
-
-    pub fn not_a_directory(path: &str) -> Self {
-        Self::new(
-            ErrorCode::NotADirectory,
-            format!("'{}' is not a directory", path),
-        )
-    }
-
-    pub fn mkdir_failed(path: &Path, source: std::io::Error) -> Self {
-        Self::new(
-            ErrorCode::MkdirFailed,
-            format!("failed to create '{}': {}", path.display(), source),
-        )
-    }
-
-    pub fn mount_failed(src: &str, target: &Path, source: nix::Error) -> Self {
-        Self::new(
-            ErrorCode::MountFailed,
-            format!(
-                "failed to mount '{}' to '{}': {}",
-                src,
-                target.display(),
-                source
-            ),
-        )
-    }
-
-    pub fn command_failed(source: std::io::Error) -> Self {
-        Self::new(
-            ErrorCode::CommandFailed,
-            format!("failed to execute chroot: {}", source),
-        )
-    }
-
-    pub fn not_root() -> Self {
-        Self::new(ErrorCode::NotRoot, "must run as root")
-    }
-
-    pub fn protected_path(path: &str) -> Self {
-        Self::new(
-            ErrorCode::ProtectedPath,
-            format!("'{}' is a protected system path", path),
-        )
-    }
-}
-
-impl fmt::Display for RecError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for RecError {}
-
-type Result<T> = std::result::Result<T, RecError>;
 
 // =============================================================================
 // Constants
@@ -206,7 +59,7 @@ fn main() -> ExitCode {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
             eprintln!("recchroot: {}", e);
-            ExitCode::from(e.code.exit_code())
+            ExitCode::from(e.code.exit_status())
         }
     }
 }
@@ -215,11 +68,7 @@ fn main() -> ExitCode {
 fn cleanup_mounts(mounted: &[PathBuf]) {
     for target in mounted.iter().rev() {
         if let Err(e) = umount2(target, MntFlags::MNT_DETACH) {
-            eprintln!(
-                "recchroot: warning: E005: failed to unmount '{}': {}",
-                target.display(),
-                e
-            );
+            eprintln!("recchroot: warning: {}", Error::unmount_failed(target, e));
         }
     }
 }
@@ -228,12 +77,9 @@ fn cleanup_mounts(mounted: &[PathBuf]) {
 /// and mounting would follow the link and could land on a host path.
 fn refuse_symlink(target: &Path) -> Result<()> {
     match fs::symlink_metadata(target) {
-        Ok(meta) if meta.file_type().is_symlink() => Err(RecError::new(
-            ErrorCode::MountFailed,
-            format!(
-                "refusing to mount over symlink '{}' (it would resolve outside the chroot)",
-                target.display()
-            ),
+        Ok(meta) if meta.file_type().is_symlink() => Err(Error::unsafe_mount_target(
+            target,
+            "it is a symlink and would resolve outside the chroot",
         )),
         _ => Ok(()),
     }
@@ -257,16 +103,13 @@ fn bind_host_resolv_conf(root: &Path, created_files: &mut Vec<PathBuf>) -> Resul
         Ok(meta) if meta.file_type().is_symlink() => return Ok(None),
         Ok(meta) if meta.is_file() => {}
         Ok(_) => {
-            return Err(RecError::new(
-                ErrorCode::MountFailed,
-                format!("'{}' is not a regular file", target.display()),
-            ))
+            return Err(Error::unsafe_mount_target(&target, "it is not a regular file"))
         }
         Err(_) => {
             if !etc.is_dir() {
                 return Ok(None);
             }
-            fs::File::create(&target).map_err(|e| RecError::mkdir_failed(&target, e))?;
+            fs::File::create(&target).map_err(|e| Error::create_failed(&target, e))?;
             created_files.push(target.clone());
         }
     }
@@ -278,7 +121,7 @@ fn bind_host_resolv_conf(root: &Path, created_files: &mut Vec<PathBuf>) -> Resul
         MsFlags::MS_BIND,
         None::<&str>,
     )
-    .map_err(|e| RecError::mount_failed("/etc/resolv.conf", &target, e))?;
+    .map_err(|e| Error::mount_failed("/etc/resolv.conf", &target, e))?;
 
     Ok(Some(target))
 }
@@ -292,32 +135,32 @@ fn run() -> Result<u8> {
     // Validate empty/whitespace-only paths first (no root needed)
     let chroot_dir_str = args.chroot_dir.trim();
     if chroot_dir_str.is_empty() {
-        return Err(RecError::target_not_found("<empty>"));
+        return Err(Error::target_not_found("<empty>"));
     }
 
     let chroot_dir = Path::new(chroot_dir_str);
     if !chroot_dir.exists() {
-        return Err(RecError::target_not_found(chroot_dir_str));
+        return Err(Error::target_not_found(chroot_dir_str));
     }
     if !chroot_dir.is_dir() {
-        return Err(RecError::not_a_directory(chroot_dir_str));
+        return Err(Error::not_a_directory(chroot_dir_str));
     }
 
     // Canonicalize to resolve symlinks and ..
     let chroot_canonical = chroot_dir
         .canonicalize()
-        .map_err(|e| RecError::new(ErrorCode::TargetNotFound, e.to_string()))?;
+        .map_err(|e| Error::path_unresolvable(chroot_dir_str, e))?;
 
     // Check protected paths AFTER canonicalization (catches symlinks to protected paths)
     if is_protected_path(&chroot_canonical) {
-        return Err(RecError::protected_path(
+        return Err(Error::protected_path(
             &chroot_canonical.to_string_lossy(),
         ));
     }
 
     // Check root privileges (needed for mount operations)
     if !is_root() {
-        return Err(RecError::not_root());
+        return Err(Error::not_root());
     }
 
     let mut mounted: Vec<PathBuf> = Vec::new();
@@ -337,7 +180,7 @@ fn run() -> Result<u8> {
             refuse_symlink(&target)?;
 
             if !target.exists() {
-                fs::create_dir_all(&target).map_err(|e| RecError::mkdir_failed(&target, e))?;
+                fs::create_dir_all(&target).map_err(|e| Error::create_failed(&target, e))?;
             }
 
             mount(
@@ -347,7 +190,7 @@ fn run() -> Result<u8> {
                 MsFlags::MS_BIND | MsFlags::MS_REC,
                 None::<&str>,
             )
-            .map_err(|e| RecError::mount_failed(src, &target, e))?;
+            .map_err(|e| Error::mount_failed(src, &target, e))?;
             mounted.push(target.clone());
 
             // Recursive binds inherit the host's shared propagation; make them
@@ -360,7 +203,7 @@ fn run() -> Result<u8> {
                 MsFlags::MS_SLAVE | MsFlags::MS_REC,
                 None::<&str>,
             )
-            .map_err(|e| RecError::mount_failed(src, &target, e))?;
+            .map_err(|e| Error::mount_failed(src, &target, e))?;
         }
         Ok(())
     })();
@@ -456,9 +299,17 @@ fn run() -> Result<u8> {
         let _ = fs::remove_file(file);
     }
 
-    let status = status.map_err(RecError::command_failed)?;
+    let status = status.map_err(|e| Error::command_failed("chroot", e))?;
 
-    Ok(status.code().unwrap_or(1) as u8)
+    // Pass the command's own status through; a signal death reports 128+N,
+    // as shells do.
+    use std::os::unix::process::ExitStatusExt;
+    let code = match (status.code(), status.signal()) {
+        (Some(code), _) => code,
+        (None, Some(signal)) => 128 + signal,
+        (None, None) => 1,
+    };
+    Ok(u8::try_from(code).unwrap_or(1))
 }
 
 // =============================================================================

@@ -56,17 +56,9 @@ UUID=ABCD-1234       /boot     vfat    defaults    0    2
 - Validate the fstab syntax
 - Any other installation step
 
-## Exit Codes
+## Error Codes
 
-| Code | Error |
-|------|-------|
-| 1 | Root directory does not exist |
-| 2 | Not a directory |
-| 3 | Can't determine cwd |
-| 4 | findmnt not found |
-| 5 | findmnt failed |
-| 6 | No filesystems found |
-| 7 | blkid not found |
+Every failure prints an `E0NN` code; the number is also the exit status. The codes are defined once, in [`src/error.rs`](../src/error.rs), and shared by recstrap, recchroot and recfstab.
 
 ## Requirements
 
