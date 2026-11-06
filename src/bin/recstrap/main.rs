@@ -19,17 +19,14 @@
 //! Pre-flight checks live in `guards.rs`, one entry per check, in run order.
 
 mod guards;
-mod helpers;
 mod rootfs;
 
 use clap::Parser;
-use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use guards::{Inputs, Waiver, FORCE_WAIVES, GUARDS};
 use install_tools::error::Result;
 use install_tools::session::resolve_target;
-use helpers::{prompt_for_user_creation, regenerate_ssh_host_keys};
 use rootfs::extract_erofs;
 
 #[derive(Parser)]
@@ -144,34 +141,6 @@ fn run() -> Result<()> {
     // Verify extraction produced a valid system
     guards::verify_extraction(target)?;
 
-    // =========================================================================
-    // PHASE 7: Security Hardening
-    // =========================================================================
-
-    // SECURITY: Regenerate SSH host keys to prevent MITM attacks.
-    // The rootfs image contains pre-generated keys shared by all installations.
-    // Each installed system needs unique keys.
-    if !args.quiet {
-        eprintln!("Regenerating SSH host keys...");
-    }
-    if let Err(e) = regenerate_ssh_host_keys(target, args.quiet) {
-        // Not fatal (keys can be regenerated in the chroot), but a security
-        // problem, so it is reported even with --quiet.
-        eprintln!("recstrap: warning: SSH key regeneration failed: {}", e);
-        eprintln!("         Run 'ssh-keygen -A' in chroot to generate keys manually");
-    }
-
-    // =========================================================================
-    // PHASE 8: Optional User Creation Setup
-    // =========================================================================
-
-    // Prompt for initial user creation (Option A: Arch-style)
-    // This creates a setup script in /root that user runs in chroot
-    if !args.quiet && std::io::stdin().is_terminal() {
-        // Only prompt when someone can answer (not with --quiet or piped stdin)
-        let _ = prompt_for_user_creation(target);
-    }
-
     if !args.quiet {
         eprintln!();
         eprintln!("Done! Now complete the installation manually:");
@@ -182,10 +151,7 @@ fn run() -> Result<()> {
         eprintln!("  # Chroot into new system");
         eprintln!("  recchroot {}", target_str);
         eprintln!();
-        eprintln!("  # Set up initial user (if you created one above)");
-        eprintln!("  bash /root/setup-initial-user.sh");
-        eprintln!();
-        eprintln!("  # OR: Set root password manually (account is locked by default)");
+        eprintln!("  # Set the root password (the account is locked by default)");
         eprintln!("  passwd root");
         eprintln!();
         eprintln!("  # Install bootloader");
