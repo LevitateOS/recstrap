@@ -41,7 +41,7 @@ pub const FORCE_WAIVES: &[Waiver] = &[Waiver::NonMountpoint, Waiver::Nonempty];
 pub struct Inputs {
     pub target: PathBuf,
     /// The canonical rootfs image, if one was found.
-    pub rootfs: Option<PathBuf>,
+    rootfs: Option<PathBuf>,
     /// Where the rootfs was looked for, for the not-found message.
     pub rootfs_tried: Vec<String>,
     pub waived: Vec<Waiver>,
@@ -97,14 +97,15 @@ pub const GUARDS: &[Guard] = &[
 ];
 
 /// Run every guard in order; the first failure stops the run.
-pub fn run_all(inputs: &Inputs) -> Result<()> {
+/// Run every check that is not waived; returns the rootfs image they found.
+pub fn run_all(inputs: &Inputs) -> Result<&Path> {
     for guard in GUARDS {
         if guard.waiver.is_some_and(|w| inputs.waived.contains(&w)) {
             continue;
         }
         (guard.check)(inputs)?;
     }
-    Ok(())
+    inputs.rootfs()
 }
 
 /// Protects critical system directories from being overwritten. Never

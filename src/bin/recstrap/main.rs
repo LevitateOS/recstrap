@@ -97,9 +97,8 @@ fn run() -> Result<()> {
 
     let target = resolve_target(&args.target)?;
     let inputs = Inputs::new(target, args.rootfs.as_deref(), waived);
-    guards::run_all(&inputs)?;
+    let rootfs = guards::run_all(&inputs)?;
     let target = &inputs.target;
-    let rootfs = inputs.rootfs.as_deref().expect("rootfs_found guard passed");
     let target_str = target.to_string_lossy();
     let rootfs_str = rootfs.to_string_lossy();
 

@@ -37,6 +37,7 @@ pub enum Code {
     UnsafeMountTarget = 25,
     OnHostRootFilesystem = 26,
     IdentifierUnavailable = 27,
+    RemoveFailed = 28,
 }
 
 impl Code {
@@ -200,6 +201,13 @@ impl Error {
         Self::new(
             Code::MountFailed,
             format!("failed to mount '{source}' to '{}': {cause}", target.display()),
+        )
+    }
+
+    pub fn remove_failed(path: &Path, cause: impl fmt::Display) -> Self {
+        Self::new(
+            Code::RemoveFailed,
+            format!("failed to remove '{}': {cause}", path.display()),
         )
     }
 

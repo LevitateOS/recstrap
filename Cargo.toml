@@ -17,11 +17,6 @@ distro-spec = { path = "../../distro-spec" }
 libc = "0.2"
 nix = { version = "0.29", features = ["mount", "signal", "user"] }
 
-# Note: We implement our own guarded_ensure! macro rather than depending on
-# cheat-guard, because recstrap needs distinct exit codes (RecError) rather
-# than anyhow::Error. The macro provides cheat-aware validation with the same
-# philosophy as cheat-guard but tailored to recstrap's error handling.
-
 [dev-dependencies]
 leviso-cheat-test = { path = "../../testing/cheat-test" }
 tempfile = "3"

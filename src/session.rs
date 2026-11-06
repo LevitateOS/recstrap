@@ -172,7 +172,7 @@ impl Session {
                 continue;
             }
             if let Err(e) = fs::remove_file(&file) {
-                failures.push(Error::unmount_failed(&file, format!("cannot remove placeholder: {e}")));
+                failures.push(Error::remove_failed(&file, e));
             }
         }
         for dir in self.created_dirs.drain(..).rev() {
@@ -181,7 +181,7 @@ impl Session {
             }
             // remove_dir, not remove_dir_all: anything left inside is kept.
             if let Err(e) = fs::remove_dir(&dir) {
-                failures.push(Error::unmount_failed(&dir, format!("cannot remove directory: {e}")));
+                failures.push(Error::remove_failed(&dir, e));
             }
         }
         for (sig, previous) in self.previous_signals.drain(..) {
