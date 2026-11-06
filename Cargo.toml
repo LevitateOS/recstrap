@@ -1,20 +1,11 @@
 [package]
 name = "recstrap"
-version = "0.1.5"
-edition = "2021"
-rust-version = "1.93"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
 description = "LevitateOS installer - extracts EROFS rootfs to disk"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/LevitateOS/recstrap"
-homepage = "https://github.com/LevitateOS/recstrap"
-readme = "README.md"
-keywords = ["pacstrap", "linux", "erofs", "installer", "system"]
-categories = ["command-line-utilities", "filesystem"]
-authors = ["LevitateOS Contributors"]
-exclude = [
-    ".github/*",
-    "CLAUDE.md",
-]
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
