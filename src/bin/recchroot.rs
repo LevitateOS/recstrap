@@ -24,7 +24,7 @@ struct Args {
     /// Chroot directory (e.g., /mnt)
     chroot_dir: String,
 
-    /// Command to run (default: /bin/bash)
+    /// Command to run (default: root's login shell in the target)
     #[arg(trailing_var_arg = true)]
     command: Vec<String>,
 }
@@ -43,6 +43,22 @@ fn main() -> ExitCode {
             ExitCode::from(e.code.exit_status())
         }
     }
+}
+
+/// The target's own login shell for root, so an interactive chroot works on
+/// any distro (Acorn ships ash, not bash). Falls back to POSIX `/bin/sh`.
+fn target_root_shell(root: &Path) -> String {
+    std::fs::read_to_string(root.join("etc/passwd"))
+        .ok()
+        .and_then(|passwd| {
+            passwd
+                .lines()
+                .find(|line| line.starts_with("root:"))
+                .and_then(|line| line.split(':').nth(6))
+                .filter(|shell| !shell.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "/bin/sh".to_string())
 }
 
 fn run() -> Result<u8> {
@@ -79,9 +95,10 @@ fn run() -> Result<u8> {
         }
     }
 
+    let shell = target_root_shell(&root);
     let (cmd, cmd_args) = match args.command.split_first() {
         Some((cmd, rest)) => (cmd.as_str(), rest),
-        None => ("/bin/bash", &[][..]),
+        None => (shell.as_str(), &[][..]),
     };
     let status = session
         .command("chroot")
