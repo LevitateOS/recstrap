@@ -1,8 +1,8 @@
 //! Swap partition detection from /proc/swaps.
 
-use crate::device::get_device_identifier;
-use crate::error::Result;
-use crate::fstab::escape_fstab;
+use super::device::get_device_identifier;
+use super::error::Result;
+use super::fstab::escape_fstab;
 use std::fs;
 
 /// Represents a swap entry from /proc/swaps.

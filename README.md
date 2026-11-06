@@ -1,5 +1,7 @@
 # recstrap
 
+This crate builds the three LevitateOS install tools: `recstrap` (below), [`recchroot`](docs/recchroot.md) and [`recfstab`](docs/recfstab.md).
+
 Extracts LevitateOS EROFS rootfs to a target directory. Like `pacstrap` for Arch - just extraction, nothing else.
 
 ## Status

@@ -5,12 +5,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "LevitateOS installer - extracts EROFS rootfs to disk"
+description = "LevitateOS install tools: recstrap (extract the rootfs), recchroot (enter it), recfstab (generate its fstab)"
+
+[lib]
+name = "install_tools"
+path = "src/lib.rs"
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
 distro-spec = { path = "../../distro-spec" }
 libc = "0.2"
+nix = { version = "0.29", features = ["mount", "signal", "user"] }
 
 # Note: We implement our own guarded_ensure! macro rather than depending on
 # cheat-guard, because recstrap needs distinct exit codes (RecError) rather
@@ -19,3 +24,4 @@ libc = "0.2"
 
 [dev-dependencies]
 leviso-cheat-test = { path = "../../testing/cheat-test" }
+tempfile = "3"

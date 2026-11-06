@@ -1,6 +1,6 @@
 //! Mount point parsing from findmnt output.
 
-use crate::error::{RecfstabError, Result};
+use super::error::{RecfstabError, Result};
 use std::process::Command;
 
 /// Represents a single mount point from findmnt output.

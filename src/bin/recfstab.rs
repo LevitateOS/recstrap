@@ -1,7 +1,7 @@
 //! CLI entry point for recfstab.
 
 use clap::Parser;
-use recfstab::{run, IdType};
+use install_tools::fstab::{run, IdType};
 use std::process::ExitCode;
 
 /// Command-line arguments for recfstab.
