@@ -6,7 +6,8 @@
 //! protects and how it could be weakened; they are for maintainers and are not
 //! printed.
 
-use distro_spec::shared::{is_protected_path, is_root, ROOTFS_SEARCH_PATHS};
+use distro_spec::shared::live_boot::ROOTFS_SEARCH_PATHS;
+use distro_spec::shared::{is_protected_path, is_root};
 use install_tools::error::{Error, Result};
 use std::fs::File;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
@@ -89,7 +90,7 @@ pub const GUARDS: &[Guard] = &[
     Guard { check: empty, waiver: Some(Waiver::Nonempty) },
     Guard { check: enough_space, waiver: None },
     Guard { check: rootfs_found, waiver: None },
-    Guard { check: rootfs_is_file, waiver: None },
+    Guard { check: rootfs_is_image, waiver: None },
     Guard { check: rootfs_outside_target, waiver: None },
     Guard { check: rootfs_is_erofs, waiver: None },
     Guard { check: kernel_has_erofs, waiver: None },
@@ -215,10 +216,15 @@ fn rootfs_found(inputs: &Inputs) -> Result<()> {
     inputs.rootfs().map(|_| ())
 }
 
-/// Protects against a directory or device being treated as the image.
-fn rootfs_is_file(inputs: &Inputs) -> Result<()> {
+/// Protects against a directory being treated as the image. The live rootfs
+/// handle may resolve to the payload partition, so a block device counts.
+fn rootfs_is_image(inputs: &Inputs) -> Result<()> {
+    use std::os::unix::fs::FileTypeExt;
     let rootfs = inputs.rootfs()?;
-    if !rootfs.is_file() {
+    let is_image = std::fs::metadata(rootfs)
+        .map(|m| m.is_file() || m.file_type().is_block_device())
+        .unwrap_or(false);
+    if !is_image {
         return Err(Error::rootfs_not_file(&rootfs.to_string_lossy()));
     }
     Ok(())
@@ -237,12 +243,13 @@ fn rootfs_outside_target(inputs: &Inputs) -> Result<()> {
     Ok(())
 }
 
-/// Protects against mounting a corrupt or wrong-format file: the image must be
-/// named `.erofs`, be readable, and carry the EROFS superblock magic.
+/// Protects against mounting a corrupt or wrong-format image: an image file
+/// must be named `.erofs`, and file or partition must be readable and carry
+/// the EROFS superblock magic.
 fn rootfs_is_erofs(inputs: &Inputs) -> Result<()> {
     let rootfs = inputs.rootfs()?;
     let shown = rootfs.to_string_lossy();
-    if rootfs.extension().and_then(|e| e.to_str()) != Some(ROOTFS_EXTENSION) {
+    if rootfs.is_file() && rootfs.extension().and_then(|e| e.to_str()) != Some(ROOTFS_EXTENSION) {
         return Err(Error::invalid_rootfs_format(
             &shown,
             &format!("expected a .{ROOTFS_EXTENSION} image"),
