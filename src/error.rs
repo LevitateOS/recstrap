@@ -36,6 +36,7 @@ pub enum Code {
     NoFilesystems = 24,
     UnsafeMountTarget = 25,
     OnHostRootFilesystem = 26,
+    IdentifierUnavailable = 27,
 }
 
 impl Code {
@@ -239,6 +240,15 @@ impl Error {
             Code::OnHostRootFilesystem,
             format!(
                 "'{path}' is on the host's root filesystem (mount the target partition, or pass --allow-host-root-fs)"
+            ),
+        )
+    }
+
+    pub fn identifier_unavailable(device: &str, tag: &str) -> Self {
+        Self::new(
+            Code::IdentifierUnavailable,
+            format!(
+                "cannot read {tag} of '{device}' (run as root, or choose another identifier type)"
             ),
         )
     }

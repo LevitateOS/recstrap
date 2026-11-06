@@ -1,7 +1,7 @@
 //! CLI entry point for recfstab.
 
 use clap::Parser;
-use install_tools::fstab::{run, IdType};
+use install_tools::fstab::{generate, IdType};
 use std::process::ExitCode;
 
 /// Command-line arguments for recfstab.
@@ -19,22 +19,21 @@ struct Args {
     root: String,
 
     /// Use filesystem LABEL instead of UUID for device identification
-    #[arg(short = 'L', long, conflicts_with_all = ["partuuid", "partlabel"])]
+    #[arg(short = 'L', long, group = "id")]
     label: bool,
 
     /// Use partition UUID (PARTUUID) instead of filesystem UUID
-    #[arg(short = 'p', long, conflicts_with_all = ["label", "partlabel"])]
+    #[arg(short = 'p', long, group = "id")]
     partuuid: bool,
 
     /// Use partition LABEL (PARTLABEL) instead of filesystem UUID
-    #[arg(short = 't', long, conflicts_with_all = ["label", "partuuid"])]
+    #[arg(short = 't', long, group = "id")]
     partlabel: bool,
 }
 
 fn main() -> ExitCode {
     let args = Args::parse();
 
-    // Determine identifier type from flags
     let id_type = if args.label {
         IdType::Label
     } else if args.partuuid {
@@ -45,8 +44,13 @@ fn main() -> ExitCode {
         IdType::Uuid
     };
 
-    match run(&args.root, id_type) {
-        Ok(()) => ExitCode::SUCCESS,
+    match generate(&args.root, id_type) {
+        Ok(entries) => {
+            for entry in entries {
+                println!("{entry}");
+            }
+            ExitCode::SUCCESS
+        }
         Err(e) => {
             eprintln!("recfstab: {}", e);
             ExitCode::from(e.code.exit_status())
