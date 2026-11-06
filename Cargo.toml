@@ -1,20 +1,11 @@
 [package]
 name = "recchroot"
-version = "0.1.4"
-edition = "2021"
-rust-version = "1.93"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
 description = "Enter chroot with proper bind mounts (like arch-chroot)"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/LevitateOS/recchroot"
-homepage = "https://github.com/LevitateOS/recchroot"
-readme = "README.md"
-keywords = ["chroot", "linux", "mount", "arch-chroot", "system"]
-categories = ["command-line-utilities", "filesystem"]
-authors = ["LevitateOS Contributors"]
-exclude = [
-    ".github/*",
-    "CLAUDE.md",
-]
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
