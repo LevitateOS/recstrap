@@ -9,12 +9,8 @@
 //!   recstrap /mnt --force            # Allow non-empty / non-mount-point target
 //!   recstrap /mnt --quiet            # Scripting mode (minimal output)
 //!
-//! This is NOT archinstall. This is pacstrap.
-//! After running recstrap, you must manually:
-//!   - Generate /etc/fstab
-//!   - Install bootloader (bootctl install)
-//!   - Set root password (passwd)
-//!   - Configure timezone, locale, hostname
+//! This is NOT archinstall. This is pacstrap: it extracts files and stops;
+//! the live install docs give the rest of the installation.
 //!
 //! Pre-flight checks live in `guards.rs`, one entry per check, in run order.
 
@@ -35,9 +31,8 @@ use rootfs::extract_erofs;
 #[command(about = "Extract LevitateOS rootfs to target directory (like pacstrap)")]
 #[command(
     long_about = "Extracts the LevitateOS EROFS rootfs image to a target directory. \
-    This is the pacstrap equivalent for LevitateOS - it only extracts files. \
-    You must do everything else manually: partitioning, formatting, mounting, \
-    fstab generation, bootloader installation, and system configuration."
+    This is the pacstrap equivalent for LevitateOS - it only extracts files; \
+    the live install docs describe the rest of the installation."
 )]
 struct Args {
     /// Target directory (must be mounted, e.g., /mnt)
@@ -142,24 +137,7 @@ fn run() -> Result<()> {
     guards::verify_extraction(target)?;
 
     if !args.quiet {
-        eprintln!();
-        eprintln!("Done! Now complete the installation manually:");
-        eprintln!();
-        eprintln!("  # Generate fstab");
-        eprintln!("  recfstab {} >> {}/etc/fstab", target_str, target_str);
-        eprintln!();
-        eprintln!("  # Chroot into new system");
-        eprintln!("  recchroot {}", target_str);
-        eprintln!();
-        eprintln!("  # Set the root password (the account is locked by default)");
-        eprintln!("  passwd root");
-        eprintln!();
-        eprintln!("  # Install bootloader");
-        eprintln!("  bootctl install");
-        eprintln!();
-        eprintln!("  # Exit chroot and reboot");
-        eprintln!("  exit");
-        eprintln!("  reboot");
+        eprintln!("Extracted {} to {}.", rootfs_str, target_str);
     }
 
     Ok(())
