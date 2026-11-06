@@ -120,20 +120,11 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    // =========================================================================
-    // PHASE 5: Extraction
-    // =========================================================================
-
     if !args.quiet {
         eprintln!("Extracting {} to {}...", rootfs_str, target_str);
     }
     extract_erofs(rootfs, target)?;
 
-    // =========================================================================
-    // PHASE 6: Post-Extraction Verification
-    // =========================================================================
-
-    // Verify extraction produced a valid system
     guards::verify_extraction(target)?;
 
     if !args.quiet {
