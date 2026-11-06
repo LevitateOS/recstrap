@@ -46,7 +46,7 @@ Every failure prints an `E0NN` code; the number is also the exit status. The cod
 ## Protected Paths
 
 The host system directories recchroot refuses are `PROTECTED_PATHS` in
-`distro/spec/src/shared/paths.rs`.
+`src/guard.rs`.
 
 ## Requirements
 

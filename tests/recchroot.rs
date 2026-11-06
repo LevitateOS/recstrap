@@ -54,7 +54,7 @@ fn test_empty_path() {
 
 #[test]
 fn test_not_root() {
-    if distro_spec::shared::is_root() {
+    if install_tools::guard::is_root() {
         // As root, recchroot would really bind-mount into the directory.
         eprintln!("skipped: running as root");
         return;

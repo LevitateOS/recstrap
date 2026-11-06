@@ -12,7 +12,7 @@
 use clap::Parser;
 use install_tools::error::{Error, Result};
 use install_tools::session::{resolve_target, Session};
-use distro_spec::shared::is_root;
+use install_tools::guard::is_root;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -33,7 +33,7 @@ struct Args {
 /// (when the host has it) comes along without a mount of its own.
 const BIND_DIRS: &[&str] = &["/proc", "/sys", "/dev", "/run"];
 
-use distro_spec::shared::is_protected_path;
+use install_tools::guard::is_protected_path;
 
 fn main() -> ExitCode {
     match run() {

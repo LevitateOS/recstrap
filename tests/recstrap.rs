@@ -5,7 +5,7 @@
 //! Target, protected-path and root checks run unprivileged; the checks after
 //! the root check are `#[ignore]`d and run as root with `--include-ignored`.
 
-use distro_spec::shared::is_root;
+use install_tools::guard::is_root;
 use std::process::Command;
 
 /// Helper to run recstrap with given args

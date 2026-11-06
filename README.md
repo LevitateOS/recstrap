@@ -65,7 +65,7 @@ This is intentional. Manual install like Arch.
 ## Protected Paths (Cannot Override)
 
 The host system directories recstrap refuses as a target are `PROTECTED_PATHS`
-in `distro/spec/src/shared/paths.rs`.
+in `src/guard.rs`.
 
 ## Error Codes
 

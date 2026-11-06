@@ -6,8 +6,8 @@
 //! protects and how it could be weakened; they are for maintainers and are not
 //! printed.
 
-use distro_spec::shared::live_boot::ROOTFS_SEARCH_PATHS;
-use distro_spec::shared::{is_protected_path, is_root};
+use recinit::live::ROOTFS_SEARCH_PATHS;
+use install_tools::guard::{is_protected_path, is_root};
 use install_tools::error::{Error, Result};
 use std::fs::File;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
