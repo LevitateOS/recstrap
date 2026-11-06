@@ -83,7 +83,8 @@ fn test_root_check_without_root() {
     if is_root() {
         return;
     }
-    let output = run_recstrap(&["/tmp"]);
+    let target = tempfile::tempdir().expect("create unprotected target");
+    let output = run_recstrap(&[target.path().to_str().unwrap()]);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -109,16 +110,6 @@ fn test_root_check_without_root() {
 
 #[test]
 fn test_nonexistent_directory() {
-    if !is_root() {
-        let output = run_recstrap(&["/nonexistent/path/12345"]);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains("E008:"),
-            "Expected E008 when not root, stderr was: {}",
-            stderr
-        );
-        return;
-    }
     let output = run_recstrap(&["/nonexistent/path/12345"]);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -403,7 +394,8 @@ fn test_exit_code_failure_on_error() {
 #[test]
 fn test_exit_code_is_error_specific() {
     if !is_root() {
-        let output = run_recstrap(&["/tmp"]);
+        let target = tempfile::tempdir().expect("create unprotected target");
+        let output = run_recstrap(&[target.path().to_str().unwrap()]);
         assert_eq!(
             output.status.code(),
             Some(8),

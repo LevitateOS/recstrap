@@ -16,58 +16,21 @@
 //!   - Set root password (passwd)
 //!   - Configure timezone, locale, hostname
 //!
-//! ## Cheat-Aware Design
-//!
-//! This tool uses cheat-guarded validation based on Anthropic's research on
-//! emergent misalignment. Each validation check documents:
-//! - What user scenario it protects
-//! - How the check could be "cheated" (weakened to falsely pass)
-//! - What users would experience if the check were cheated
-//!
-//! This creates friction against shortcuts and makes cheating more expensive
-//! than honest implementation.
-//!
-//! ## Error Codes
-//!
-//! | Code | Description |
-//! |------|-------------|
-//! | E001 | Target directory does not exist |
-//! | E002 | Target is not a directory |
-//! | E003 | Target directory not writable |
-//! | E004 | Rootfs image not found |
-//! | E005 | Rootfs extraction command failed |
-//! | E006 | Extracted system verification failed |
-//! | E007 | Required extraction tool not installed |
-//! | E008 | Must run as root |
-//! | E009 | Target directory not empty (use --force) |
-//! | E010 | Target is a protected path or on the host root filesystem |
-//! | E011 | Target is not a mount point |
-//! | E012 | Insufficient disk space |
-//! | E013 | Rootfs is not a regular file |
-//! | E014 | Rootfs is not readable |
-//! | E015 | Rootfs is inside target directory |
-//! | E016 | Rootfs format is invalid |
-//! | E017 | EROFS kernel support is missing |
+//! Pre-flight checks live in `guards.rs`, one entry per check, in run order.
 
-mod constants;
+mod guards;
 mod helpers;
 mod rootfs;
-mod validation;
 
 use clap::Parser;
-use std::fs;
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use constants::{MIN_REQUIRED_BYTES, ROOTFS_SEARCH_PATHS};
-use install_tools::error::{Error, Result};
-use helpers::{
-    can_read_rootfs, ensure_erofs_module, find_rootfs, get_available_space, is_dir_empty,
-    is_mount_point, is_protected_path, is_root, is_rootfs_inside_target, prompt_for_user_creation,
-    regenerate_ssh_host_keys,
-};
-use rootfs::{extract_erofs, validate_rootfs_magic, verify_extraction, RootfsType};
+use guards::{Inputs, Waiver, FORCE_WAIVES, GUARDS};
+use install_tools::error::Result;
+use install_tools::session::resolve_target;
+use helpers::{prompt_for_user_creation, regenerate_ssh_host_keys};
+use rootfs::extract_erofs;
 
 #[derive(Parser)]
 #[command(name = "recstrap")]
@@ -83,8 +46,7 @@ struct Args {
     /// Target directory (must be mounted, e.g., /mnt)
     target: String,
 
-    /// Rootfs location (auto-detected from common paths if not specified)
-    /// Must be an EROFS image ending in `.erofs`.
+    /// Rootfs image (auto-detected on the live ISO if not specified)
     #[arg(long)]
     rootfs: Option<String>,
 
@@ -114,15 +76,6 @@ struct Args {
     check: bool,
 }
 
-/// True when `path` lives on the same filesystem as the running system's `/`.
-fn is_on_host_root_fs(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    match (fs::metadata(path), fs::metadata("/")) {
-        (Ok(target), Ok(root)) => target.dev() == root.dev(),
-        _ => false,
-    }
-}
-
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -136,299 +89,28 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let args = Args::parse();
 
-    // =========================================================================
-    // PHASE 1: Environment Checks (before touching filesystem)
-    // =========================================================================
+    let mut waived = Vec::new();
+    if args.force {
+        waived.extend_from_slice(FORCE_WAIVES);
+    }
+    for (flag, waiver) in [
+        (args.allow_non_mountpoint, Waiver::NonMountpoint),
+        (args.allow_nonempty, Waiver::Nonempty),
+        (args.allow_host_root_fs, Waiver::HostRootFs),
+    ] {
+        if flag {
+            waived.push(waiver);
+        }
+    }
 
-    guarded_ensure!(
-        is_root(),
-        Error::not_root(),
-        protects = "Installation runs with sufficient privileges",
-        severity = "CRITICAL",
-        cheats = [
-            "Skip root check entirely",
-            "Use capabilities instead of full root",
-            "Assume sudo will handle it"
-        ],
-        consequence = "Extraction fails with permission denied on first file"
-    );
-
-    // NOTE: EROFS kernel support is checked after we discover/validate rootfs.
-
-    // =========================================================================
-    // PHASE 2: Target Directory Validation
-    // =========================================================================
-
-    let target = Path::new(&args.target);
-
-    guarded_ensure!(
-        target.exists(),
-        Error::target_not_found(&args.target),
-        protects = "Target directory exists before we try to use it",
-        severity = "CRITICAL",
-        cheats = [
-            "Create the directory automatically",
-            "Skip existence check",
-            "Accept parent directory instead"
-        ],
-        consequence = "Confusing 'No such file or directory' errors during extraction"
-    );
-
-    guarded_ensure!(
-        target.is_dir(),
-        Error::not_a_directory(&args.target),
-        protects = "Target is a directory, not a file or device",
-        severity = "CRITICAL",
-        cheats = [
-            "Accept any path type",
-            "Truncate file and use as directory",
-            "Skip the check"
-        ],
-        consequence = "Catastrophic data loss if target is a file, or extraction to device node"
-    );
-
-    // Canonicalize path to resolve symlinks and ..
-    let target = target
-        .canonicalize()
-        .map_err(|e| Error::path_unresolvable(&args.target, e))?;
+    let target = resolve_target(&args.target)?;
+    let inputs = Inputs::new(target, args.rootfs.as_deref(), waived);
+    guards::run_all(&inputs)?;
+    let target = &inputs.target;
+    let rootfs = inputs.rootfs.as_deref().expect("rootfs_found guard passed");
     let target_str = target.to_string_lossy();
-
-    guarded_ensure!(
-        !is_protected_path(&target),
-        Error::protected_path(&target_str),
-        protects = "Critical system directories are never overwritten",
-        severity = "CRITICAL",
-        cheats = [
-            "Remove paths from protected list",
-            "Add --force override for protected paths",
-            "Skip check when running as root",
-            "Check before canonicalization (symlink bypass)"
-        ],
-        consequence = "Complete system destruction - / or /usr overwritten, unbootable system"
-    );
-
-    // Write permission check
-    let test_file = target.join(".recstrap_write_test");
-    let can_write = fs::write(&test_file, b"test").is_ok();
-    if can_write {
-        let _ = fs::remove_file(&test_file);
-    }
-
-    guarded_ensure!(
-        can_write,
-        Error::not_writable(&target_str),
-        protects = "We can actually write to the target before starting extraction",
-        severity = "CRITICAL",
-        cheats = [
-            "Skip write test",
-            "Assume root can write anywhere",
-            "Check parent directory instead"
-        ],
-        consequence = "Extraction starts, partially completes, then fails - corrupted state"
-    );
-
-    // Never extract onto the running system's root filesystem unless that
-    // is asked for by name: `--force /home/user` would otherwise copy a whole
-    // rootfs over live data.
-    if !args.allow_host_root_fs {
-        guarded_ensure!(
-            !is_on_host_root_fs(&target),
-            Error::on_host_root_filesystem(&target_str),
-            protects = "The running system's root filesystem is never overwritten by --force",
-            severity = "CRITICAL",
-            cheats = [
-                "Let --force imply --allow-host-root-fs",
-                "Compare paths instead of device IDs"
-            ],
-            consequence = "A rootfs is copied over live host directories such as a home directory"
-        );
-    }
-
-    let allow_non_mountpoint = args.force || args.allow_non_mountpoint;
-    let allow_nonempty = args.force || args.allow_nonempty;
-
-    // Mount point check (unless --allow-non-mountpoint / --force)
-    if !allow_non_mountpoint {
-        let is_mp = is_mount_point(&target).unwrap_or(false);
-        guarded_ensure!(
-            is_mp,
-            Error::not_mount_point(&target_str),
-            protects = "User has actually mounted a filesystem for installation",
-            severity = "HIGH",
-            cheats = [
-                "Always allow with --force",
-                "Skip check entirely",
-                "Accept any directory"
-            ],
-            consequence = "User installs to wrong filesystem, fills up wrong disk, loses work"
-        );
-    }
-
-    // Empty check (unless --allow-nonempty / --force)
-    if !allow_nonempty {
-        let is_empty = is_dir_empty(&target).unwrap_or(false);
-        guarded_ensure!(
-            is_empty,
-            Error::target_not_empty(&target_str),
-            protects = "User doesn't accidentally overwrite existing data",
-            severity = "HIGH",
-            cheats = [
-                "Always allow with --force",
-                "Ignore hidden files",
-                "Only check for specific files"
-            ],
-            consequence = "User's existing data silently overwritten, possibly unrecoverable"
-        );
-    }
-
-    // Disk space check
-    if let Ok(available) = get_available_space(&target) {
-        guarded_ensure!(
-            available >= MIN_REQUIRED_BYTES,
-            Error::insufficient_space(
-                MIN_REQUIRED_BYTES / (1024 * 1024),
-                available / (1024 * 1024)
-            ),
-            protects = "Sufficient disk space exists for the full extraction",
-            severity = "HIGH",
-            cheats = [
-                "Reduce MIN_REQUIRED_BYTES",
-                "Skip space check",
-                "Only warn instead of fail"
-            ],
-            consequence = "Extraction runs out of space mid-way, leaving corrupted partial system"
-        );
-    } else if !args.quiet {
-        eprintln!("recstrap: warning: cannot check disk space");
-    }
-
-    // =========================================================================
-    // PHASE 3: Rootfs Validation (EROFS only)
-    // =========================================================================
-
-    let rootfs: PathBuf = match args.rootfs.as_ref() {
-        Some(path) => {
-            let p = Path::new(path);
-            guarded_ensure!(
-                p.exists(),
-                Error::rootfs_not_found(&[path.as_str()]),
-                protects = "Specified rootfs file actually exists",
-                severity = "CRITICAL",
-                cheats = [
-                    "Create empty file",
-                    "Use default path instead",
-                    "Skip existence check"
-                ],
-                consequence = "Extraction fails with 'file not found'"
-            );
-
-            guarded_ensure!(
-                p.is_file(),
-                Error::rootfs_not_file(path),
-                protects = "Rootfs path points to a file, not directory",
-                severity = "CRITICAL",
-                cheats = ["Accept directories", "Skip type check"],
-                consequence = "Extraction fails with confusing error about invalid format"
-            );
-
-            p.canonicalize()
-                .map_err(|e| Error::path_unresolvable(path, e))?
-        }
-        None => {
-            let found = find_rootfs();
-            guarded_ensure!(
-                found.is_some(),
-                Error::rootfs_not_found(ROOTFS_SEARCH_PATHS),
-                protects = "Live ISO rootfs is found automatically",
-                severity = "CRITICAL",
-                cheats = [
-                    "Return first path without checking existence",
-                    "Hardcode a path",
-                    "Create empty file at expected location"
-                ],
-                consequence = "User must manually specify --rootfs, poor UX"
-            );
-
-            let found = found.unwrap();
-            let p = Path::new(found);
-
-            guarded_ensure!(
-                p.is_file(),
-                Error::rootfs_not_file(found),
-                protects = "Auto-detected rootfs is actually a file",
-                severity = "CRITICAL",
-                cheats = ["Skip type verification", "Accept any path type"],
-                consequence = "Extraction fails with confusing error"
-            );
-
-            p.canonicalize()
-                .map_err(|e| Error::path_unresolvable(found, e))?
-        }
-    };
-
     let rootfs_str = rootfs.to_string_lossy();
 
-    // Detect rootfs type from extension (EROFS only).
-    let rootfs_type = RootfsType::from_path(&rootfs).ok_or_else(|| {
-        Error::invalid_rootfs_format(
-            &rootfs_str,
-            "expected .erofs extension (squashfs is no longer supported)",
-        )
-    })?;
-
-    guarded_ensure!(
-        can_read_rootfs(&rootfs),
-        Error::rootfs_not_readable(&rootfs_str),
-        protects = "Rootfs file is readable before starting extraction",
-        severity = "CRITICAL",
-        cheats = [
-            "Skip readability check",
-            "Only check file permissions metadata",
-            "Assume root can read anything"
-        ],
-        consequence = "Extraction fails immediately with permission denied"
-    );
-
-    guarded_ensure!(
-        !is_rootfs_inside_target(&rootfs, &target),
-        Error::rootfs_inside_target(&rootfs_str, &target_str),
-        protects = "Rootfs is not inside the extraction target",
-        severity = "CRITICAL",
-        cheats = [
-            "Skip this check",
-            "Only check exact path match",
-            "Check before canonicalization"
-        ],
-        consequence = "Recursive extraction disaster - extracting overwrites source mid-extraction"
-    );
-
-    // =========================================================================
-    // PHASE 4: Format Validation & Tool Availability
-    // =========================================================================
-
-    // Validate magic bytes match expected format
-    if let Err(e) = validate_rootfs_magic(&rootfs, rootfs_type) {
-        return Err(Error::invalid_rootfs_format(&rootfs_str, &e.to_string()));
-    }
-
-    guarded_ensure!(
-        ensure_erofs_module(),
-        Error::erofs_not_supported(),
-        protects = "Kernel can mount EROFS filesystems",
-        severity = "CRITICAL",
-        cheats = [
-            "Skip kernel check",
-            "Assume module is loaded",
-            "Silently fall back to unsupported formats"
-        ],
-        consequence = "Mount fails with cryptic 'unknown filesystem type' error"
-    );
-
-    // =========================================================================
-    // PRE-FLIGHT COMPLETE
-    // =========================================================================
-
-    // If --check mode, exit successfully without extracting
     if args.check {
         if !args.quiet {
             eprintln!();
@@ -437,9 +119,9 @@ fn run() -> Result<()> {
             eprintln!("{}", "=".repeat(70));
             eprintln!();
             eprintln!("Target:    {}", target_str);
-            eprintln!("Rootfs:    {} ({:?})", rootfs_str, rootfs_type);
+            eprintln!("Rootfs:    {}", rootfs_str);
             eprintln!();
-            eprintln!("All {} validation checks passed.", 14);
+            eprintln!("All {} validation checks passed.", GUARDS.len());
             eprintln!("Ready to extract. Run without --check to proceed.");
             eprintln!();
         }
@@ -451,21 +133,16 @@ fn run() -> Result<()> {
     // =========================================================================
 
     if !args.quiet {
-        eprintln!(
-            "Extracting {} ({:?}) to {}...",
-            rootfs_str, rootfs_type, target_str
-        );
+        eprintln!("Extracting {} to {}...", rootfs_str, target_str);
     }
-
-    // EROFS extraction path: mount + cp -a + unmount
-    extract_erofs(&rootfs, &target, args.quiet)?;
+    extract_erofs(rootfs, target)?;
 
     // =========================================================================
     // PHASE 6: Post-Extraction Verification
     // =========================================================================
 
     // Verify extraction produced a valid system
-    verify_extraction(&target)?;
+    guards::verify_extraction(target)?;
 
     // =========================================================================
     // PHASE 7: Security Hardening
@@ -477,7 +154,7 @@ fn run() -> Result<()> {
     if !args.quiet {
         eprintln!("Regenerating SSH host keys...");
     }
-    if let Err(e) = regenerate_ssh_host_keys(&target, args.quiet) {
+    if let Err(e) = regenerate_ssh_host_keys(target, args.quiet) {
         // Not fatal (keys can be regenerated in the chroot), but a security
         // problem, so it is reported even with --quiet.
         eprintln!("recstrap: warning: SSH key regeneration failed: {}", e);
@@ -492,7 +169,7 @@ fn run() -> Result<()> {
     // This creates a setup script in /root that user runs in chroot
     if !args.quiet && std::io::stdin().is_terminal() {
         // Only prompt when someone can answer (not with --quiet or piped stdin)
-        let _ = prompt_for_user_creation(&target);
+        let _ = prompt_for_user_creation(target);
     }
 
     if !args.quiet {
