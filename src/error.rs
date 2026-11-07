@@ -1,8 +1,8 @@
-//! The one error table for recstrap, recchroot and recfstab.
+//! The one error table for recstrap, recchroot, recfstab and recsetup.
 //!
 //! Each variant's number is its stable code: it prints as `E0NN` and is the
-//! process exit status, so the same failure means the same thing in all three
-//! tools. Numbers are assigned explicitly and never reused.
+//! process exit status, so the same failure means the same thing in every
+//! tool. Numbers are assigned explicitly and never reused.
 
 use std::fmt;
 use std::path::Path;
@@ -38,6 +38,13 @@ pub enum Code {
     OnHostRootFilesystem = 26,
     IdentifierUnavailable = 27,
     RemoveFailed = 28,
+    UnknownInitSystem = 29,
+    InvalidRequest = 30,
+    ChoiceUnavailable = 31,
+    PasswordInput = 32,
+    BootFileMissing = 33,
+    UserExists = 34,
+    UnsafeTargetPath = 35,
 }
 
 impl Code {
@@ -56,14 +63,22 @@ impl fmt::Display for Code {
 pub struct Error {
     pub code: Code,
     pub message: String,
+    /// What to do about it, when the message alone does not say.
+    pub remediation: Option<String>,
 }
 
 impl Error {
-    fn new(code: Code, message: impl Into<String>) -> Self {
+    pub fn new(code: Code, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
+            remediation: None,
         }
+    }
+
+    pub fn fix(mut self, remediation: impl Into<String>) -> Self {
+        self.remediation = Some(remediation.into());
+        self
     }
 
     pub fn target_not_found(path: &str) -> Self {
@@ -271,7 +286,11 @@ impl Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
+        write!(f, "{}: {}", self.code, self.message)?;
+        if let Some(remediation) = &self.remediation {
+            write!(f, "\n  fix: {remediation}")?;
+        }
+        Ok(())
     }
 }
 

@@ -1,6 +1,6 @@
 # recstrap
 
-This crate builds the three LevitateOS install tools: `recstrap` (below), [`recchroot`](docs/recchroot.md) and [`recfstab`](docs/recfstab.md).
+This crate builds the LevitateOS install tools: `recstrap` (below), [`recchroot`](docs/recchroot.md), [`recfstab`](docs/recfstab.md) and `recsetup`, which configures and boots the extracted system (time zone, locale, keymap, hostname, accounts, systemd-boot, boot entries, machine id, services) with plan/apply JSON; its page is `docs/content/src/content/05-rec-tooling/14-recsetup.ts` in the superproject.
 
 Extracts LevitateOS EROFS rootfs to a target directory. Like `pacstrap` for Arch - just extraction, nothing else.
 
@@ -37,8 +37,7 @@ recstrap --allow-non-mountpoint --allow-nonempty /mnt
 - Formatting → you run `mkfs`
 - Mounting → you run `mount`
 - fstab → you run `recfstab`
-- Bootloader → you run `bootctl`
-- Users/passwords → you run `useradd`, `passwd`
+- Configuration, users, bootloader and services → you run `recsetup` (or the commands its plan prints)
 
 This is intentional. Manual install like Arch.
 
@@ -69,7 +68,7 @@ in `src/guard.rs`.
 
 ## Error Codes
 
-Every failure prints an `E0NN` code; the number is also the exit status. The codes are defined once, in [`src/error.rs`](src/error.rs), and shared by recstrap, recchroot and recfstab.
+Every failure prints an `E0NN` code; the number is also the exit status. The codes are defined once, in [`src/error.rs`](src/error.rs), and shared by recstrap, recchroot, recfstab and recsetup.
 
 ## Requirements
 
