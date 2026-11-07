@@ -564,7 +564,7 @@ pub fn locales(root: &Root, target: &Target) -> Vec<(LocaleChoice, Option<Locale
 fn keymap_dirs(init: InitSystem) -> &'static [&'static str] {
     match init {
         InitSystem::Systemd => &["usr/lib/kbd/keymaps", "usr/share/kbd/keymaps"],
-        InitSystem::Openrc => &["usr/share/keymaps", "usr/share/kbd/keymaps", "usr/lib/kbd/keymaps"],
+        InitSystem::Openrc => &["usr/share/bkeymaps", "usr/share/keymaps", "usr/share/kbd/keymaps", "usr/lib/kbd/keymaps"],
     }
 }
 
@@ -587,7 +587,11 @@ fn collect_keymaps(dir: &Path, out: &mut BTreeSet<String>) {
             if name != "include" {
                 collect_keymaps(&entry.path(), out);
             }
-        } else if let Some(stem) = name.strip_suffix(".map.gz").or_else(|| name.strip_suffix(".map")) {
+        } else if let Some(stem) = name
+            .strip_suffix(".bmap.gz")
+            .or_else(|| name.strip_suffix(".map.gz"))
+            .or_else(|| name.strip_suffix(".map"))
+        {
             out.insert(stem.to_string());
         }
     }

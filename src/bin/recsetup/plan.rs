@@ -309,8 +309,9 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         if target.init == InitSystem::Openrc
             && !root.is_file("etc/init.d/keymaps")
             && !root.is_file("etc/init.d/loadkeys")
+            && !root.is_file("etc/init.d/loadkmap")
         {
-            warnings.push("the target has no keymaps or loadkeys service, so nothing loads the keymap at boot".into());
+            warnings.push("the target has no keymaps, loadkeys or loadkmap service, so nothing loads the keymap at boot".into());
         }
         b.setup(
             Section::Keymap,
