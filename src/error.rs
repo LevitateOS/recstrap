@@ -45,6 +45,7 @@ pub enum Code {
     BootFileMissing = 33,
     UnsafeTargetPath = 34,
     BootDeviceMismatch = 35,
+    FstabConflict = 36,
 }
 
 impl Code {
@@ -288,6 +289,14 @@ impl Error {
                 "cannot read {tag} of '{device}' (run as root, or choose another identifier type)"
             ),
         )
+    }
+
+    pub fn fstab_conflict(path: &Path, files: &[String]) -> Self {
+        Self::new(
+            Code::FstabConflict,
+            format!("{} already has entries for {}", path.display(), files.join(", ")),
+        )
+        .fix("check them, then run again with --replace to swap them for the generated entries")
     }
 
     pub fn unsafe_mount_target(target: &Path, why: &str) -> Self {

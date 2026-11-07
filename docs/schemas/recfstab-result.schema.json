@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FstabResult",
+  "description": "`recfstab --json`: the entries for what is mounted under the root, what the\ntarget's fstab holds now, and (with `--write`) whether they were written.",
+  "type": "object",
+  "properties": {
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FstabEntry"
+      }
+    },
+    "existing": {
+      "description": "The fstab's active lines; empty when it has none or does not exist.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ExistingEntry"
+      }
+    },
+    "fstab_path": {
+      "description": "`<root>/etc/fstab`.",
+      "type": "string"
+    },
+    "root": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "warnings": {
+      "description": "Things to look at before booting the target; none stops `--write`.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "written": {
+      "description": "`--write` appended the entries (replacing conflicting lines with `--replace`).",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "root",
+    "fstab_path",
+    "entries",
+    "existing",
+    "warnings",
+    "written"
+  ],
+  "$defs": {
+    "ExistingEntry": {
+      "description": "An active line already in the target's fstab.",
+      "type": "object",
+      "properties": {
+        "conflicts": {
+          "description": "Describes a mount point (or swap) that a generated entry also describes.",
+          "type": "boolean"
+        },
+        "file": {
+          "type": "string"
+        },
+        "fstype": {
+          "type": "string"
+        },
+        "line": {
+          "description": "1-based.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "spec": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "line",
+        "spec",
+        "file",
+        "fstype",
+        "conflicts"
+      ]
+    },
+    "FstabEntry": {
+      "description": "One line `recfstab` writes, and the mount it describes.",
+      "type": "object",
+      "properties": {
+        "file": {
+          "description": "The mount point, relative to the root; `none` for swap.",
+          "type": "string"
+        },
+        "fstype": {
+          "type": "string"
+        },
+        "options": {
+          "type": "string"
+        },
+        "origin": {
+          "description": "What is mounted (the device, or the swap file's path on the live system).",
+          "type": "string"
+        },
+        "pass": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "spec": {
+          "type": "string"
+        },
+        "text": {
+          "description": "The entry as written, its comment line included.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin",
+        "spec",
+        "file",
+        "fstype",
+        "options",
+        "pass",
+        "text"
+      ]
+    }
+  }
+}

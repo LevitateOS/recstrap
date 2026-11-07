@@ -174,35 +174,41 @@ fn mount_point(inputs: &Inputs) -> Result<()> {
 }
 
 /// Protects existing data from being silently overwritten. `lost+found` is
-/// ignored: a freshly formatted ext4 filesystem always has it. Weakened by:
-/// ignoring hidden files. Consequence: unrecoverable data loss.
+/// ignored: a freshly formatted ext4 filesystem always has it; so are empty
+/// filesystems mounted inside the target (the layout's /boot, /var). Weakened
+/// by: ignoring hidden files, or a mount that holds files. Consequence: unrecoverable data loss.
 fn empty(inputs: &Inputs) -> Result<()> {
-    let entries = std::fs::read_dir(&inputs.target)
-        .map_err(|e| Error::path_unresolvable(&inputs.target_str(), e))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| Error::path_unresolvable(&inputs.target_str(), e))?;
-        if entry.file_name() != "lost+found" {
-            return Err(Error::target_not_empty(&inputs.target_str()));
-        }
+    if holds_files(&inputs.target)? {
+        return Err(Error::target_not_empty(&inputs.target_str()));
     }
     Ok(())
+}
+
+/// Whether `dir` holds anything but `lost+found` and empty filesystems mounted
+/// on it: the layout recpart (or the guide) mounts at /mnt, /mnt/boot and
+/// /mnt/var before extraction counts as empty.
+fn holds_files(dir: &Path) -> Result<bool> {
+    let unresolvable = |e| Error::path_unresolvable(&dir.to_string_lossy(), e);
+    let device = std::fs::metadata(dir).map_err(unresolvable)?.dev();
+    for entry in std::fs::read_dir(dir).map_err(unresolvable)? {
+        let entry = entry.map_err(unresolvable)?;
+        if entry.file_name() == "lost+found" {
+            continue;
+        }
+        let path = entry.path();
+        let meta = std::fs::symlink_metadata(&path).map_err(unresolvable)?;
+        let mounted_here = meta.is_dir() && meta.dev() != device;
+        if !mounted_here || holds_files(&path)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Protects against running out of space half-way through. Weakened by:
 /// lowering the floor or only warning. Consequence: a corrupt partial system.
 fn enough_space(inputs: &Inputs) -> Result<()> {
-    let path = std::ffi::CString::new(inputs.target.as_os_str().as_bytes())
-        .map_err(|_| Error::not_writable(&inputs.target_str()))?;
-    // SAFETY: zeroed statvfs is a valid out-parameter; `path` is NUL-terminated.
-    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(path.as_ptr(), &mut stat) } != 0 {
-        return Err(Error::path_unresolvable(
-            &inputs.target_str(),
-            std::io::Error::last_os_error(),
-        ));
-    }
-    #[allow(clippy::unnecessary_cast)] // field types vary by platform
-    let available = stat.f_bavail as u64 * stat.f_frsize as u64;
+    let available = free_bytes(&inputs.target)?;
     if available < MIN_FREE_BYTES {
         return Err(Error::insufficient_space(
             MIN_FREE_BYTES / (1024 * 1024),
@@ -210,6 +216,20 @@ fn enough_space(inputs: &Inputs) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Space an unprivileged write could use on the filesystem holding `target`.
+pub fn free_bytes(target: &Path) -> Result<u64> {
+    let target_str = target.to_string_lossy();
+    let path = std::ffi::CString::new(target.as_os_str().as_bytes())
+        .map_err(|_| Error::not_writable(&target_str))?;
+    // SAFETY: zeroed statvfs is a valid out-parameter; `path` is NUL-terminated.
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(path.as_ptr(), &mut stat) } != 0 {
+        return Err(Error::path_unresolvable(&target_str, std::io::Error::last_os_error()));
+    }
+    #[allow(clippy::unnecessary_cast)] // field types vary by platform
+    Ok(stat.f_bavail as u64 * stat.f_frsize as u64)
 }
 
 /// Protects against guessing: the rootfs is the explicit `--rootfs`, or the

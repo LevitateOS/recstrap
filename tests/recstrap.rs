@@ -288,3 +288,56 @@ fn test_home_filesystem_refused_even_with_force() {
     }
     assert_host_filesystem_refused(target.path());
 }
+
+/// A layout mounted the way recpart leaves it (the root, with an empty /boot
+/// filesystem inside) counts as empty; `--json` reports start, progress,
+/// verify and done, and the copy names every entry the start counted. A file
+/// on the inner filesystem makes the target non-empty again. Mounts loop
+/// filesystems and builds an EROFS image (mkfs.erofs).
+#[test]
+#[ignore = "needs root and mkfs.erofs: mounts loop filesystems"]
+fn json_progress_on_a_mounted_layout() {
+    use std::process::Command as Cmd;
+    let run = |program: &str, args: &[&str]| {
+        let status = Cmd::new(program).args(args).status().expect(program);
+        assert!(status.success(), "{program} {args:?} failed");
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    for sub in ["bin", "etc", "lib", "sbin", "usr/share", "var"] {
+        std::fs::create_dir_all(tree.join(sub)).unwrap();
+    }
+    for i in 0..300 {
+        std::fs::write(tree.join(format!("usr/share/f{i}")), vec![b'x'; 4096]).unwrap();
+    }
+    let p = |name: &str| dir.path().join(name).to_str().unwrap().to_string();
+    let (rootfs, disk, esp, target) = (p("rootfs.erofs"), p("disk.img"), p("esp.img"), p("t"));
+    run("mkfs.erofs", &["--quiet", &rootfs, tree.to_str().unwrap()]);
+    run("truncate", &["-s", "3G", &disk]);
+    run("truncate", &["-s", "64M", &esp]);
+    run("mkfs.ext4", &["-q", &disk]);
+    run("mkfs.vfat", &[&esp]);
+    std::fs::create_dir(&target).unwrap();
+    run("mount", &["-o", "loop", &disk, &target]);
+    std::fs::create_dir(format!("{target}/boot")).unwrap();
+    run("mount", &["-o", "loop", &esp, &format!("{target}/boot")]);
+
+    let output = run_recstrap(&["--json", "--rootfs", &rootfs, &target]);
+    std::fs::write(format!("{target}/boot/loader.conf"), b"x").unwrap();
+    let refused = run_recstrap(&["--check", "--json", "--rootfs", &rootfs, &format!("{target}/boot")]);
+    run("umount", &[&format!("{target}/boot")]);
+    run("umount", &[&target]);
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let events: Vec<serde_json::Value> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("one JSON event per line"))
+        .collect();
+    let kinds: Vec<&str> = events.iter().map(|e| e["event"].as_str().unwrap()).collect();
+    assert_eq!(kinds.first(), Some(&"start"), "{kinds:?}");
+    assert_eq!(&kinds[kinds.len() - 3..], ["progress", "verify", "done"], "{kinds:?}");
+    let done = events.last().unwrap();
+    assert_eq!(done["entries"], events[0]["total_entries"]);
+
+    assert_eq!(refused.status.code(), Some(9), "{}", String::from_utf8_lossy(&refused.stderr));
+}

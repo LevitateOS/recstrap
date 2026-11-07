@@ -2,7 +2,8 @@
 
 Generates fstab entries from mounted filesystems. Like `genfstab` for Arch.
 
-Outputs to stdout. You redirect it yourself.
+Outputs to stdout. You redirect it yourself, or let `--write` append to
+`<ROOT>/etc/fstab`.
 
 ## Status
 
@@ -20,7 +21,23 @@ recfstab /mnt >> /mnt/etc/fstab
 
 # Preview without writing
 recfstab /mnt
+
+# Append to /mnt/etc/fstab; refused (E036) when it already describes those mount points
+recfstab --write /mnt
+
+# ... replacing the lines (and recfstab's comment line above each) that describe them
+recfstab --write --replace /mnt
+
+# The entries, the fstab's current lines and warnings as JSON (the base-system app)
+recfstab --json /mnt
 ```
+
+`--json` prints a `FstabResult` ([`src/output.rs`](../src/output.rs)): the entries
+(each with the text it writes), the active lines already in `<ROOT>/etc/fstab` marked
+`conflicts` when they describe a mount point (or swap device) an entry describes, and
+warnings: nothing mounted at the root itself, no vfat EFI system partition at
+`/boot`, `/efi` or `/boot/efi`, or no `<ROOT>/etc` yet. Warnings never stop a
+write. Errors go to stderr as the shared JSON error document.
 
 ## Options
 
@@ -30,6 +47,9 @@ recfstab [OPTIONS] <ROOT>
 -L, --label      Use LABEL instead of UUID
 -p, --partuuid   Use PARTUUID (GPT partition UUID)
 -t, --partlabel  Use PARTLABEL
+-w, --write      Append the entries to <ROOT>/etc/fstab
+    --replace    With --write: replace the fstab's entries for those mount points
+    --json       Print the entries, current lines and warnings as JSON
 ```
 
 ## Output Format
@@ -51,7 +71,7 @@ UUID=ABCD-1234       /boot     vfat    defaults    0    2
 
 ## What It Does NOT Do
 
-- Write to files (you redirect)
+- Write to files, unless asked (`--write`)
 - Mount/unmount anything
 - Validate the fstab syntax
 - Any other installation step

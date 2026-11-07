@@ -13,7 +13,8 @@ mod plan;
 mod request;
 mod target;
 
-use apply::{ApplyOptions, ErrorPayload};
+use apply::ApplyOptions;
+use install_tools::output::{to_json, ErrorPayload};
 use clap::{Parser, Subcommand};
 use install_tools::error::{Error, Result};
 use install_tools::guard::is_protected_path;
@@ -67,10 +68,6 @@ enum Commands {
         #[arg(long)]
         passwords_stdin: bool,
     },
-}
-
-fn to_json<T: Serialize>(value: &T) -> String {
-    serde_json::to_string_pretty(value).expect("recsetup output types serialize to JSON")
 }
 
 fn report_error(err: &Error, json: bool) -> ExitCode {

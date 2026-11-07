@@ -6,6 +6,7 @@ use crate::plan::{Action, Plan, Step};
 use crate::target::{Root, Target};
 use install_tools::error::{Code, Error, Result};
 use install_tools::guard::is_root;
+use install_tools::output::ErrorPayload;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
@@ -15,7 +16,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub const APPLY_SCHEMA_VERSION: u32 = 1;
-pub const ERROR_SCHEMA_VERSION: u32 = 1;
 
 const TARGET_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
@@ -41,26 +41,6 @@ pub struct StepRecord {
     pub stdout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stderr: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ErrorPayload {
-    pub schema_version: u32,
-    pub code: String,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub remediation: Option<String>,
-}
-
-impl ErrorPayload {
-    pub fn of(err: &Error) -> Self {
-        Self {
-            schema_version: ERROR_SCHEMA_VERSION,
-            code: err.code.to_string(),
-            message: err.message.clone(),
-            remediation: err.remediation.clone(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]

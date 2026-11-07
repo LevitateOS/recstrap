@@ -116,3 +116,54 @@ fn fstab_describes_a_loop_target_with_a_swap_file() {
         "full output:\n{stdout}"
     );
 }
+
+/// `--write` appends to the target's fstab and keeps what was there; a second
+/// `--write` is refused (E036) rather than duplicating the entries, and
+/// `--replace` swaps them, comment lines included. Mounts a loop filesystem.
+#[test]
+#[ignore = "needs root: mounts a loop filesystem"]
+fn write_appends_refuses_duplicates_and_replaces() {
+    use std::process::Command as Cmd;
+    let run = |program: &str, args: &[&str]| {
+        let status = Cmd::new(program).args(args).status().expect(program);
+        assert!(status.success(), "{program} {args:?} failed");
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("disk.img");
+    let target = dir.path().join("t");
+    std::fs::create_dir(&target).unwrap();
+    let (image, target) = (image.to_str().unwrap(), target.to_str().unwrap());
+    run("truncate", &["-s", "200M", image]);
+    run("mkfs.ext4", &["-q", "-L", "RECFSTABWRITE", image]);
+    run("mount", &["-o", "loop", image, target]);
+    let fstab = format!("{target}/etc/fstab");
+    std::fs::create_dir(format!("{target}/etc")).unwrap();
+    std::fs::write(&fstab, "# shipped by the rootfs\ntmpfs /tmp tmpfs defaults 0 0\n").unwrap();
+
+    let first = run_recfstab(&["-L", "--write", "--json", target]);
+    let second = run_recfstab(&["-L", "--write", "--json", target]);
+    let after_second = std::fs::read_to_string(&fstab).unwrap();
+    let replaced = run_recfstab(&["-L", "--write", "--replace", "--json", target]);
+    let after_replace = std::fs::read_to_string(&fstab).unwrap();
+    run("umount", &[target]);
+
+    assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(report["written"], true);
+    assert_eq!(report["existing"][0]["file"], "/tmp");
+    assert_eq!(report["existing"][0]["conflicts"], false);
+
+    assert_eq!(second.status.code(), Some(36));
+    let error: serde_json::Value = serde_json::from_slice(&second.stderr).unwrap();
+    assert_eq!(error["code"], "E036");
+    let expected = format!(
+        "# shipped by the rootfs\ntmpfs /tmp tmpfs defaults 0 0\n# {}\nLABEL=RECFSTABWRITE\t/\text4\trelatime\t0\t1\n",
+        report["entries"][0]["origin"].as_str().unwrap()
+    );
+    assert_eq!(after_second, expected, "a refused write leaves the fstab alone");
+
+    assert!(replaced.status.success(), "{}", String::from_utf8_lossy(&replaced.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&replaced.stdout).unwrap();
+    assert_eq!(report["existing"][1]["conflicts"], true);
+    assert_eq!(after_replace, expected, "replacing gives the same fstab, not a second copy");
+}

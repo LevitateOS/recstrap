@@ -1,7 +1,8 @@
 //! CLI entry point for recfstab.
 
 use clap::Parser;
-use install_tools::fstab::{generate, IdType};
+use install_tools::fstab::{generate, report, IdType, Write};
+use install_tools::output::{to_json, ErrorPayload};
 use std::process::ExitCode;
 
 /// Command-line arguments for recfstab.
@@ -29,6 +30,20 @@ struct Args {
     /// Use partition LABEL (PARTLABEL) instead of filesystem UUID
     #[arg(short = 't', long, group = "id")]
     partlabel: bool,
+
+    /// Append the entries to <ROOT>/etc/fstab; refused (E036) when it already has
+    /// entries for the same mount points
+    #[arg(short = 'w', long)]
+    write: bool,
+
+    /// With --write: replace the fstab's entries for those mount points
+    #[arg(long, requires = "write")]
+    replace: bool,
+
+    /// Print the entries, the fstab's current entries and warnings as JSON
+    /// (errors go to stderr as JSON)
+    #[arg(long)]
+    json: bool,
 }
 
 fn main() -> ExitCode {
@@ -44,15 +59,37 @@ fn main() -> ExitCode {
         IdType::Uuid
     };
 
-    match generate(&args.root, id_type) {
-        Ok(entries) => {
+    let write = match (args.write, args.replace) {
+        (false, _) => Write::No,
+        (true, false) => Write::Append,
+        (true, true) => Write::Replace,
+    };
+    let outcome = if args.json || write != Write::No {
+        report(&args.root, id_type, write).map(|result| {
+            if args.json {
+                println!("{}", to_json(&result));
+            } else {
+                for warning in &result.warnings {
+                    eprintln!("recfstab: warning: {warning}");
+                }
+                eprintln!("recfstab: wrote {} entries to {}", result.entries.len(), result.fstab_path);
+            }
+        })
+    } else {
+        generate(&args.root, id_type).map(|entries| {
             for entry in entries {
                 println!("{entry}");
             }
-            ExitCode::SUCCESS
-        }
+        })
+    };
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("recfstab: {}", e);
+            if args.json {
+                eprintln!("{}", to_json(&ErrorPayload::of(&e)));
+            } else {
+                eprintln!("recfstab: {}", e);
+            }
             ExitCode::from(e.code.exit_status())
         }
     }

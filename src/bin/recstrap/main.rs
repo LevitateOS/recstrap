@@ -8,6 +8,7 @@
 //!   recstrap /mnt --rootfs /path     # Custom rootfs location (.erofs)
 //!   recstrap /mnt --force            # Allow non-empty / non-mount-point target
 //!   recstrap /mnt --quiet            # Scripting mode (minimal output)
+//!   recstrap /mnt --json             # Progress as JSON lines (for the base-system app)
 //!
 //! This is NOT archinstall. This is pacstrap: it extracts files and stops;
 //! the live install docs give the rest of the installation.
@@ -19,9 +20,11 @@ mod rootfs;
 
 use clap::Parser;
 use std::process::ExitCode;
+use std::time::Instant;
 
 use guards::{Inputs, Waiver, FORCE_WAIVES, GUARDS};
 use install_tools::error::Result;
+use install_tools::output::{to_json, to_json_line, ErrorPayload, StrapEvent, STRAP_SCHEMA_VERSION};
 use install_tools::session::resolve_target;
 use rootfs::extract_erofs;
 
@@ -66,20 +69,33 @@ struct Args {
     /// Check mode - run pre-flight validation only, don't extract
     #[arg(short, long)]
     check: bool,
+
+    /// Print progress as JSON lines on stdout (one event per line: start,
+    /// progress, verify, done; with --check, one checked); errors go to stderr
+    /// as JSON
+    #[arg(long)]
+    json: bool,
 }
 
 fn main() -> ExitCode {
-    match run() {
+    let args = Args::parse();
+    let json = args.json;
+    match run(args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("recstrap: {}", e);
+            if json {
+                eprintln!("{}", to_json(&ErrorPayload::of(&e)));
+            } else {
+                eprintln!("recstrap: {}", e);
+            }
             ExitCode::from(e.code.exit_status())
         }
     }
 }
 
-fn run() -> Result<()> {
-    let args = Args::parse();
+fn run(args: Args) -> Result<()> {
+    let started = Instant::now();
+    let quiet = args.quiet || args.json;
 
     let mut waived = Vec::new();
     if args.force {
@@ -102,8 +118,25 @@ fn run() -> Result<()> {
     let target_str = target.to_string_lossy();
     let rootfs_str = rootfs.to_string_lossy();
 
+    if args.check && args.json {
+        let checks = GUARDS
+            .iter()
+            .filter(|g| !g.waiver.is_some_and(|w| inputs.waived.contains(&w)))
+            .count() as u32;
+        let event = StrapEvent::Checked {
+            schema_version: STRAP_SCHEMA_VERSION,
+            target: target_str.into_owned(),
+            rootfs: rootfs_str.into_owned(),
+            rootfs_bytes: std::fs::metadata(rootfs).map(|m| m.len()).unwrap_or(0),
+            free_bytes: guards::free_bytes(target)?,
+            checks,
+        };
+        println!("{}", to_json_line(&event));
+        return Ok(());
+    }
+
     if args.check {
-        if !args.quiet {
+        if !quiet {
             eprintln!();
             eprintln!("{}", "=".repeat(70));
             eprintln!("PRE-FLIGHT CHECK PASSED");
@@ -119,14 +152,26 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    if !args.quiet {
+    if !quiet {
         eprintln!("Extracting {} to {}...", rootfs_str, target_str);
     }
-    extract_erofs(rootfs, target)?;
+    let (entries, bytes) = extract_erofs(rootfs, target, args.json)?;
 
+    if args.json {
+        println!("{}", to_json_line(&StrapEvent::Verify));
+    }
     guards::verify_extraction(target)?;
 
-    if !args.quiet {
+    if args.json {
+        let event = StrapEvent::Done {
+            schema_version: STRAP_SCHEMA_VERSION,
+            entries,
+            bytes,
+            duration_ms: started.elapsed().as_millis() as u64,
+        };
+        println!("{}", to_json_line(&event));
+    }
+    if !quiet {
         eprintln!("Extracted {} to {}.", rootfs_str, target_str);
     }
 

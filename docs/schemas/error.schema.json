@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ErrorPayload",
+  "description": "What a failed run prints to stderr with `--json`.",
+  "type": "object",
+  "properties": {
+    "code": {
+      "description": "`E0NN`; its number is the exit status.",
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "remediation": {
+      "description": "What to do about it, when the message alone does not say.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema_version",
+    "code",
+    "message"
+  ]
+}

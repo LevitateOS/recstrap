@@ -7,8 +7,12 @@
 //! left out. Paths are always written relative to the root.
 
 use crate::error::{Error, Result};
+use crate::output::{ExistingEntry, FstabEntry, FstabResult, FSTAB_SCHEMA_VERSION};
 use std::collections::BTreeSet;
 use std::fmt;
+use std::fs;
+use std::io::ErrorKind;
+use std::path::Path;
 use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +139,183 @@ pub fn generate(root_arg: &str, id_type: IdType) -> Result<Vec<Entry>> {
         return Err(Error::no_filesystems(&root.0));
     }
     Ok(entries)
+}
+
+/// What `--write` does with the target's fstab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Write {
+    /// Only report.
+    No,
+    /// Append the entries; refuse if the fstab already describes one of their mount points.
+    Append,
+    /// Drop the lines that describe the same mount points (and the comment line recfstab
+    /// wrote above each), then append.
+    Replace,
+}
+
+/// The entries, what `<root>/etc/fstab` holds now, and what to look at before booting;
+/// with `write`, the entries appended to that fstab.
+pub fn report(root_arg: &str, id_type: IdType, write: Write) -> Result<FstabResult> {
+    let root = crate::session::resolve_target(root_arg)?;
+    let root_str = root.to_string_lossy().into_owned();
+    let entries = generate(&root_str, id_type)?;
+    let fstab_path = root.join("etc/fstab");
+    let existing = read_existing(&fstab_path)?;
+    let existing: Vec<ExistingEntry> = existing
+        .into_iter()
+        .map(|line| ExistingEntry {
+            conflicts: entries.iter().any(|entry| describes_same(entry, &line)),
+            ..line
+        })
+        .collect();
+
+    let mut warnings = Vec::new();
+    if !entries.iter().any(|e| e.file == "/") {
+        warnings.push(format!(
+            "nothing is mounted at {root_str} itself, so the target's / gets no entry"
+        ));
+    }
+    if !entries
+        .iter()
+        .any(|e| e.fstype == "vfat" && matches!(e.file.as_str(), "/boot" | "/efi" | "/boot/efi"))
+    {
+        warnings.push(format!(
+            "no EFI system partition (vfat) is mounted at {root_str}/boot or {root_str}/efi; \
+             the boot step installs systemd-boot there"
+        ));
+    }
+    if !root.join("etc").is_dir() {
+        warnings.push(format!("{root_str}/etc doesn't exist yet: run recstrap {root_str} first"));
+    }
+
+    let written = match write {
+        Write::No => false,
+        Write::Append | Write::Replace => {
+            let conflicts: Vec<String> = existing
+                .iter()
+                .filter(|line| line.conflicts)
+                .map(|line| if line.file == "none" { line.spec.clone() } else { line.file.clone() })
+                .collect();
+            if write == Write::Append && !conflicts.is_empty() {
+                return Err(Error::fstab_conflict(&fstab_path, &conflicts));
+            }
+            let dropped: BTreeSet<u32> =
+                existing.iter().filter(|line| line.conflicts).map(|line| line.line).collect();
+            write_fstab(&fstab_path, &dropped, &entries)?;
+            true
+        }
+    };
+
+    Ok(FstabResult {
+        schema_version: FSTAB_SCHEMA_VERSION,
+        root: root_str,
+        fstab_path: fstab_path.to_string_lossy().into_owned(),
+        entries: entries
+            .iter()
+            .map(|e| FstabEntry {
+                origin: e.origin.clone(),
+                spec: e.spec.clone(),
+                file: e.file.clone(),
+                fstype: e.fstype.clone(),
+                options: e.options.clone(),
+                pass: e.pass,
+                text: e.to_string(),
+            })
+            .collect(),
+        existing,
+        warnings,
+        written,
+    })
+}
+
+/// An existing line describes the entry's mount point, or for swap, its device or file.
+fn describes_same(entry: &Entry, line: &ExistingEntry) -> bool {
+    if entry.file == "none" {
+        line.fstype == "swap" && line.spec == entry.spec
+    } else {
+        line.file == entry.file
+    }
+}
+
+/// The fstab's active lines, unescaped; a missing fstab has none.
+fn read_existing(path: &Path) -> Result<Vec<ExistingEntry>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(Error::path_unresolvable(&path.to_string_lossy(), e)),
+    };
+    Ok(text
+        .lines()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let line_text = line.trim();
+            if line_text.is_empty() || line_text.starts_with('#') {
+                return None;
+            }
+            let mut fields = line_text.split_whitespace().map(unescape_octal);
+            Some(ExistingEntry {
+                line: i as u32 + 1,
+                spec: fields.next()?,
+                file: fields.next().unwrap_or_default(),
+                fstype: fields.next().unwrap_or_default(),
+                conflicts: false,
+            })
+        })
+        .collect())
+}
+
+/// Rewrites the fstab without the lines in `dropped` (1-based, each taking the
+/// `# origin` comment line right above it), then with `entries` appended.
+fn write_fstab(path: &Path, dropped: &BTreeSet<u32>, entries: &[Entry]) -> Result<()> {
+    let current = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(Error::path_unresolvable(&path.to_string_lossy(), e)),
+    };
+    let lines: Vec<&str> = current.lines().collect();
+    let mut kept: Vec<&str> = Vec::with_capacity(lines.len());
+    for (i, line) in lines.iter().enumerate() {
+        let number = i as u32 + 1;
+        if dropped.contains(&number) {
+            continue;
+        }
+        let comment_of_dropped = line.starts_with("# ") && dropped.contains(&(number + 1));
+        if !comment_of_dropped {
+            kept.push(line);
+        }
+    }
+    let mut text = kept.join("\n");
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    for entry in entries {
+        text.push_str(&entry.to_string());
+    }
+    let tmp = path.with_extension("recfstab.tmp");
+    fs::write(&tmp, text).map_err(|e| Error::create_failed(path, e))?;
+    fs::rename(&tmp, path).map_err(|e| Error::create_failed(path, e))
+}
+
+/// fstab(5)'s octal escapes (`\040` for a space).
+fn unescape_octal(field: &str) -> String {
+    let mut out = String::with_capacity(field.len());
+    let mut rest = field;
+    while let Some(i) = rest.find('\\') {
+        out.push_str(&rest[..i]);
+        let code = rest.get(i + 1..i + 4).and_then(|oct| u8::from_str_radix(oct, 8).ok());
+        match code {
+            Some(byte) => {
+                out.push(byte as char);
+                rest = &rest[i + 4..];
+            }
+            None => {
+                out.push('\\');
+                rest = &rest[i + 1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The canonical root, with path membership and re-rooting in one place.

@@ -22,7 +22,26 @@ recstrap --check /mnt
 
 # Skip the mount point and empty checks (same as --force)
 recstrap --allow-non-mountpoint --allow-nonempty /mnt
+
+# Progress as JSON lines on stdout, errors as JSON on stderr (the base-system app)
+recstrap --json /mnt
+recstrap --check --json /mnt
 ```
+
+With `--json`, each stdout line is one event: `start` (the image's entry count and
+size, once it is mounted and counted), `progress` (entries copied, counted from
+`cp -v`, and bytes in use on the target's filesystem since the start; about five a
+second), `verify`, and `done`. `--check --json` prints one `checked` event (the image,
+its size, the target's free space). A failure prints the shared error document (`code`,
+`message`, `remediation`) to stderr as its last JSON object; messages from `mount` or
+`cp` can come before it. The types are `StrapEvent` and `ErrorPayload` in
+[`src/output.rs`](src/output.rs), with JSON Schemas in `docs/schemas/` written by
+`cargo xtask gen`.
+
+The empty-target check (10) passes a target whose only contents are `lost+found`
+and empty filesystems mounted inside it, so the layout disk-plan (recpart) mounts
+at `/mnt`, `/mnt/boot` and `/mnt/var` counts as empty. A file anywhere on those
+inner filesystems does not.
 
 ## What recstrap Does
 
