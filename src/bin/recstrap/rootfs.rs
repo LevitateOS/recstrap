@@ -5,7 +5,9 @@ use install_tools::session::Session;
 use std::path::Path;
 
 /// Extract an EROFS image: mount it read-only in a private directory and copy
-/// everything with `cp -aT` (always available, unlike rsync). The session
+/// everything with GNU `cp -aT --preserve=xattr`. Explicit xattr preservation
+/// makes missing capability/xattr support an error instead of silently losing
+/// privilege metadata. Recipe supplies the deployment tools. The session
 /// unmounts and removes the directory on every exit path, interrupts included.
 pub fn extract_erofs(rootfs: &Path, target: &Path) -> Result<()> {
     let mut session = Session::begin("recstrap");
@@ -16,6 +18,7 @@ pub fn extract_erofs(rootfs: &Path, target: &Path) -> Result<()> {
     let cp_status = session
         .command("cp")
         .arg("-aT")
+        .arg("--preserve=xattr")
         .arg(&mount_point)
         .arg(target)
         .status()
