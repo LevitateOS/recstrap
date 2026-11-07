@@ -13,6 +13,9 @@ use std::process::Command;
 
 pub const PLAN_SCHEMA_VERSION: u32 = 1;
 const SETUP_PROGRAM: &str = "/usr/libexec/recipe-system-setup";
+/// The installed system's initramfs on the live medium, next to the live one
+/// (`boot/initramfs.img`); the release build puts it there for systemd variants.
+const INSTALLED_INITRAMFS: &str = "initramfs-installed.img";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -422,12 +425,34 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
     if let Some(boot) = &request.boot {
         let live = |file: &str| PathBuf::from(format!("{LIVE_MEDIA_DIR}/boot/{file}"));
         let kernel = boot.kernel.clone().unwrap_or_else(|| live("vmlinuz"));
+        // The live medium's own initramfs (boot/initramfs.img) only finds the live
+        // medium; the installed system boots through the one built from its rootfs,
+        // which the ISO carries beside it.
+        let live_initramfs = live("initramfs.img");
         let initrd = match &boot.initrd {
             Some(path) if path.as_os_str().is_empty() => None,
             Some(path) => Some(path.clone()),
-            None if target.init == InitSystem::Systemd => Some(live("initramfs.img")),
+            None if target.init == InitSystem::Systemd => Some(live(INSTALLED_INITRAMFS)),
             None => None,
         };
+        if let Some(initrd) = &initrd {
+            let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => a == b,
+            };
+            if same(initrd, &live_initramfs) {
+                return Err(invalid(
+                    format!(
+                        "'{}' is the live medium's initramfs, which looks for the live medium and ignores root=: the installed system would not boot from its disk",
+                        initrd.display()
+                    ),
+                    format!(
+                        "pass the installed system's initramfs ({}), or leave --initrd out to use it",
+                        live(INSTALLED_INITRAMFS).display()
+                    ),
+                ));
+            }
+        }
         let missing = |what: &str, path: &Path| {
             Error::new(
                 Code::BootFileMissing,
@@ -443,7 +468,18 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         }
         if let Some(initrd) = &initrd {
             if !initrd.is_file() {
-                return Err(missing("initrd", initrd));
+                return Err(if boot.initrd.is_none() {
+                    Error::new(
+                        Code::BootFileMissing,
+                        format!(
+                            "this live medium has no installed-system initramfs ('{}')",
+                            initrd.display()
+                        ),
+                    )
+                    .fix("boot a live ISO that carries boot/initramfs-installed.img, or pass the installed system's initramfs with --initrd")
+                } else {
+                    missing("initrd", initrd)
+                });
             }
         }
         if !root.is_dir("boot") {

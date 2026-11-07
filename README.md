@@ -121,6 +121,10 @@ boot devices against it, comparing device numbers so `/dev/disk/by-*` names and
 other symlinks work: `--root-device` (mutable) or `--slot-a` (A/B) must be the
 partition mounted at `--root`, and `--slot-b` must not be (E035). The ESP may
 be on another disk.
+The initramfs it installs defaults, on systemd systems, to the installed
+system's own (`boot/initramfs-installed.img` on the live medium, built by the
+release from the rootfs the ISO installs); the live medium's `boot/initramfs.img`
+is refused (E030), since it only finds the live medium and ignores `root=`.
 Passwords are supplied only at installation. This works offline without shipping
 a compiler image or Ginux build runtime on the live ISO. Storage inspection,
 ESP deployment and boot activation remain operations of the install tools and

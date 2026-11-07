@@ -84,8 +84,11 @@ pub struct BootRequest {
     /// Kernel to install; the live media's when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kernel: Option<PathBuf>,
-    /// Initramfs to install; unset takes the live media's on systemd systems
-    /// and none on OpenRC ones (they boot without one). An empty string means none.
+    /// Initramfs to install; unset takes the installed system's initramfs the
+    /// live media carries (`boot/initramfs-installed.img`) on systemd systems
+    /// and none on OpenRC ones (they boot without one). An empty string means
+    /// none. The live media's own `boot/initramfs.img` is refused: it boots
+    /// only the live medium.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initrd: Option<PathBuf>,
     /// Extra kernel options for the entries (consoles, for example).
@@ -133,7 +136,7 @@ pub struct RequestFlags {
     /// Kernel image (default: the live media's)
     #[arg(long)]
     pub kernel: Option<PathBuf>,
-    /// Initramfs image (default: the live media's on systemd systems, none on OpenRC)
+    /// Initramfs image (default: the live media's boot/initramfs-installed.img on systemd systems, none on OpenRC)
     #[arg(long, conflicts_with = "no_initrd")]
     pub initrd: Option<PathBuf>,
     /// Boot without an initramfs
