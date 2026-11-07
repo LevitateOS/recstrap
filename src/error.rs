@@ -43,8 +43,7 @@ pub enum Code {
     ChoiceUnavailable = 31,
     PasswordInput = 32,
     BootFileMissing = 33,
-    UserExists = 34,
-    UnsafeTargetPath = 35,
+    UnsafeTargetPath = 34,
 }
 
 impl Code {
