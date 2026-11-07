@@ -353,14 +353,6 @@ pub fn detect(root: &Root) -> Result<Target> {
     })
 }
 
-/// The admin rule recsetup writes when the target lacks one.
-pub fn admin_rule(tool: AdminTool) -> (&'static str, &'static str, u32) {
-    match tool {
-        AdminTool::Sudo => ("/etc/sudoers.d/10-wheel", "%wheel ALL=(ALL:ALL) ALL\n", 0o440),
-        AdminTool::Doas => ("/etc/doas.conf", "permit persist :wheel\n", 0o600),
-    }
-}
-
 fn admin_rule_present(root: &Root, tool: AdminTool) -> bool {
     let (files, matches): (Vec<String>, fn(&str) -> bool) = match tool {
         AdminTool::Sudo => (

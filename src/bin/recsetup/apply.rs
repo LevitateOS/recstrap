@@ -10,7 +10,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -216,31 +216,12 @@ fn run(root: &Root, step: &Step, passwords: Option<&str>) -> std::result::Result
     let plain = |r: Result<()>| r.map(|()| None).map_err(|e| (e, None));
     match &step.action {
         Action::Write { path, content, mode } => plain(write(root, path, content.as_bytes(), *mode)),
-        Action::Symlink { path, target } => plain((|| {
-            let host = prepare_entry(root, path)?;
-            symlink(target, &host).map_err(|e| Error::create_failed(&host, e))
-        })()),
-        Action::Remove { path } => plain((|| {
-            let host = root.resolve_entry(path)?;
-            match fs::symlink_metadata(&host) {
-                Ok(meta) if !meta.is_dir() => fs::remove_file(&host).map_err(|e| Error::remove_failed(&host, e)),
-                _ => Ok(()),
-            }
-        })()),
         Action::Copy { from, from_target, to } => plain((|| {
             let source = if *from_target { root.resolve(&from.to_string_lossy())? } else { from.clone() };
             let bytes = fs::read(&source).map_err(|e| {
                 Error::new(Code::BootFileMissing, format!("cannot read '{}': {e}", source.display()))
             })?;
             write(root, to, &bytes, 0o644)
-        })()),
-        Action::RandomMachineId => plain((|| {
-            let mut bytes = [0u8; 16];
-            fs::File::open("/dev/urandom")
-                .and_then(|mut f| f.read_exact(&mut bytes))
-                .map_err(|e| Error::command_failed("reading /dev/urandom", e))?;
-            let id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-            write(root, "/etc/machine-id", format!("{id}\n").as_bytes(), 0o444)
         })()),
         Action::Chroot { argv, passwords: wants } => {
             let mut command = Command::new(recchroot());
@@ -281,26 +262,7 @@ fn exec(mut command: Command, name: &str, stdin: Option<&str>) -> std::result::R
     }
 }
 
-/// The host path for a new entry at `path`: parent directories created
-/// inside the root, and a file or symlink already there removed.
-fn prepare_entry(root: &Root, path: &str) -> Result<PathBuf> {
-    let host = root.resolve_entry(path)?;
-    if let Some(parent) = host.parent() {
-        fs::create_dir_all(parent).map_err(|e| Error::create_failed(parent, e))?;
-    }
-    match fs::symlink_metadata(&host) {
-        Ok(meta) if meta.is_dir() => {
-            return Err(Error::new(Code::UnsafeTargetPath, format!("'{}' is a directory", host.display()))
-                .fix("remove the directory, then run the plan again"))
-        }
-        Ok(_) => fs::remove_file(&host).map_err(|e| Error::remove_failed(&host, e))?,
-        Err(_) => {}
-    }
-    Ok(host)
-}
 
-/// Write a file in the target atomically (a temporary file renamed over
-/// it), never through a symlink at its path.
 fn write(root: &Root, path: &str, content: &[u8], mode: u32) -> Result<()> {
     let host = root.resolve_entry(path)?;
     let parent = host.parent().map(Path::to_path_buf).unwrap_or_else(|| root.path().to_path_buf());

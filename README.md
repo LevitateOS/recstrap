@@ -1,6 +1,6 @@
 # recstrap
 
-This crate builds the LevitateOS install tools: `recstrap` (below), [`recchroot`](docs/recchroot.md), [`recfstab`](docs/recfstab.md) and `recsetup`, which configures and boots the extracted system (time zone, locale, keymap, hostname, accounts, systemd-boot, boot entries, machine id, services) with plan/apply JSON; its page is `docs/content/src/content/05-rec-tooling/14-recsetup.ts` in the superproject.
+This crate builds the LevitateOS install tools: `recstrap` (below), [`recchroot`](docs/recchroot.md), [`recfstab`](docs/recfstab.md) and `recsetup`, which configures and boots the extracted system (time zone, locale, keymap, hostname, accounts, systemd-boot, boot entries, machine id, services) with plan/apply JSON and the target setup program installed by Recipe; its page is `docs/content/src/content/05-rec-tooling/14-recsetup.ts` in the superproject.
 
 Extracts LevitateOS EROFS rootfs to a target directory. Like `pacstrap` for Arch - just extraction, nothing else.
 
@@ -86,3 +86,17 @@ cargo build --release
 ## License
 
 MIT OR Apache-2.0
+
+## Recipe and deployment
+
+The system recipes prepare a complete installed filesystem, including safe login
+configuration, default networking, administrator rules and
+`/usr/libexec/recipe-system-setup`. Live autologin, live passwords, shell overrides
+and test helpers are a separate overlay and are never deployed by recstrap.
+
+`recsetup` validates user choices and invokes that target-side setup program for
+timezone, locale, keymap, hostname, accounts, machine identity and services.
+Passwords are supplied only at installation. This works offline without shipping
+a compiler image or Ginux build runtime on the live ISO. Storage inspection,
+ESP deployment and boot activation remain operations of the install tools and
+recab. recstrap continues to validate and extract the selected image.
