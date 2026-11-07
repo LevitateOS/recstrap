@@ -73,7 +73,7 @@ fn run() -> Result<u8> {
         return Err(Error::not_root());
     }
 
-    let mut session = Session::begin("recchroot");
+    let mut session = Session::begin("recchroot")?;
     for dir in BIND_DIRS {
         session.bind_dir(Path::new(dir), &root.join(dir.trim_start_matches('/')))?;
     }

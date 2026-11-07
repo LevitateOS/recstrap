@@ -54,8 +54,8 @@ struct Args {
     #[arg(long)]
     allow_nonempty: bool,
 
-    /// Allow extracting onto the filesystem that holds the running system's /
-    /// (never implied by --force)
+    /// Allow extracting onto a filesystem the running system has mounted at /
+    /// or another system directory such as /home (never implied by --force)
     #[arg(long)]
     allow_host_root_fs: bool,
 

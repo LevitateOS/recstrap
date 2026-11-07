@@ -2,8 +2,9 @@
 //!
 //! These tests run the actual binary and verify behavior.
 //!
-//! Target, protected-path and root checks run unprivileged; the checks after
-//! the root check are `#[ignore]`d and run as root with `--include-ignored`.
+//! Target, protected-path, host-filesystem and root checks run unprivileged;
+//! the checks after the root check are `#[ignore]`d and run as root with
+//! `--include-ignored`.
 
 use install_tools::guard::is_root;
 use std::process::Command;
@@ -23,7 +24,8 @@ fn test_root_check_without_root() {
         return;
     }
     let target = tempfile::tempdir().expect("create unprotected target");
-    let output = run_recstrap(&[target.path().to_str().unwrap()]);
+    // A temp dir is on a host system filesystem, which is refused first.
+    let output = run_recstrap(&["--allow-host-root-fs", target.path().to_str().unwrap()]);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -242,4 +244,47 @@ fn test_mnt_is_allowed() {
         "/mnt should not be protected, stderr was: {}",
         stderr
     );
+}
+
+fn assert_host_filesystem_refused(target: &std::path::Path) {
+    let output = run_recstrap(&["--force", "--check", target.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("E026:"),
+        "Expected E026 for {}, even with --force, stderr was: {}",
+        target.display(),
+        stderr
+    );
+    assert_eq!(output.status.code(), Some(26), "Exit code should be 26 for E026");
+}
+
+/// /tmp is a host system directory: on the root filesystem, or a tmpfs of its
+/// own that is itself a system mount. Either way --force does not waive it.
+#[test]
+fn test_host_filesystem_refused_even_with_force() {
+    let target = tempfile::tempdir_in("/tmp").expect("create a directory in /tmp");
+    assert_host_filesystem_refused(target.path());
+}
+
+/// A directory under /home or /root on the same filesystem as that directory
+/// (a separate partition or a btrfs subvolume, as on Fedora) is refused. The
+/// cargo target dir is used when it lies there; elsewhere the test is skipped.
+#[test]
+fn test_home_filesystem_refused_even_with_force() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .canonicalize()
+        .expect("canonical cargo target tmpdir");
+    let Some(system_dir) = ["/home", "/root"].into_iter().find(|d| dir.starts_with(d)) else {
+        eprintln!("skipped: {} is not under /home or /root", dir.display());
+        return;
+    };
+    let target = tempfile::tempdir_in(&dir).expect("create a directory in the target dir");
+    let same_fs = std::fs::metadata(target.path()).map(|m| m.dev()).ok()
+        == std::fs::metadata(system_dir).map(|m| m.dev()).ok();
+    if !same_fs {
+        eprintln!("skipped: {} is on another filesystem than {system_dir}", dir.display());
+        return;
+    }
+    assert_host_filesystem_refused(target.path());
 }

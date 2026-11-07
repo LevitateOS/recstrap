@@ -10,7 +10,7 @@ use std::path::Path;
 /// privilege metadata. Recipe supplies the deployment tools. The session
 /// unmounts and removes the directory on every exit path, interrupts included.
 pub fn extract_erofs(rootfs: &Path, target: &Path) -> Result<()> {
-    let mut session = Session::begin("recstrap");
+    let mut session = Session::begin("recstrap")?;
     let mount_point = session.private_dir("recstrap-erofs")?;
 
     session.mount_image(rootfs, "erofs", &mount_point)?;

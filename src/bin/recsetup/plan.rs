@@ -5,6 +5,7 @@
 use crate::request::{check_hostname, check_username, invalid, BootMode, SetupRequest};
 use crate::target::{self, BootloaderMethod, InitSystem, LocaleMethod, Root, Target};
 use install_tools::error::{Code, Error, Result};
+use install_tools::guard::mount_table;
 use recinit::live::LIVE_MEDIA_DIR;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -507,6 +508,18 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                         "pass two different partitions",
                     ));
                 }
+                let mounted = RootMount::of(root.path())?;
+                mounted.require("--slot-a", a)?;
+                if mounted.holds(block_device("--slot-b", b_dev)?) {
+                    return Err(Error::new(
+                        Code::BootDeviceMismatch,
+                        format!(
+                            "--slot-b '{}' is the partition mounted at '{r}'; that is slot A",
+                            b_dev.display()
+                        ),
+                    )
+                    .fix("pass the other slot's partition as --slot-b (recpart apply reports both)"));
+                }
                 let mut argv: Vec<String> = ["recab", "init", "--root", &r, "--slot-a"]
                     .iter()
                     .map(|s| s.to_string())
@@ -543,6 +556,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                         "pass --root-device",
                     ));
                 };
+                RootMount::of(root.path())?.require("--root-device", device)?;
                 let partuuid = partuuid(device)?;
                 b.push(
                     Section::BootEntries,
@@ -668,4 +682,84 @@ fn partuuid(device: &Path) -> Result<String> {
         ));
     }
     Ok(value)
+}
+
+/// The filesystem mounted exactly at the root, which the boot entries must
+/// name: an entry for any other partition boots another disk's system.
+struct RootMount {
+    root: PathBuf,
+    /// mountinfo's device number for it.
+    dev: (u32, u32),
+    /// The device its mount source names, when the device number is an
+    /// anonymous one (major 0, as btrfs reports) rather than the partition's.
+    source_dev: Option<(u32, u32)>,
+    source: String,
+}
+
+impl RootMount {
+    fn of(root: &Path) -> Result<Self> {
+        let table = mount_table()?;
+        // The last mount on a point is the visible one.
+        let Some(mount) = table.iter().rev().find(|m| m.mount_point == root) else {
+            return Err(Error::new(
+                Code::NotMountPoint,
+                format!(
+                    "'{}' is not a mount point, so the boot devices cannot be checked against the installed system",
+                    root.display()
+                ),
+            )
+            .fix("mount the installed system's root partition at --root"));
+        };
+        let source_dev = (mount.dev.0 == 0)
+            .then(|| block_device("mount source", Path::new(&mount.source)).ok())
+            .flatten();
+        Ok(Self {
+            root: root.to_path_buf(),
+            dev: mount.dev,
+            source_dev,
+            source: mount.source.clone(),
+        })
+    }
+
+    fn holds(&self, dev: (u32, u32)) -> bool {
+        self.dev == dev || self.source_dev == Some(dev)
+    }
+
+    /// Refuse a `flag` device that is not the partition mounted at the root.
+    fn require(&self, flag: &str, device: &Path) -> Result<()> {
+        if self.holds(block_device(flag, device)?) {
+            return Ok(());
+        }
+        Err(Error::new(
+            Code::BootDeviceMismatch,
+            format!(
+                "{flag} '{}' is not the partition mounted at '{}' ({})",
+                device.display(),
+                self.root.display(),
+                self.source
+            ),
+        )
+        .fix(format!(
+            "pass the partition mounted at --root as {flag}, or mount the installed system's root partition at --root"
+        )))
+    }
+}
+
+/// A block device's number, through symlinks such as /dev/disk/by-uuid names.
+fn block_device(flag: &str, device: &Path) -> Result<(u32, u32)> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let shown = device.display().to_string();
+    let meta = device
+        .canonicalize()
+        .and_then(std::fs::metadata)
+        .map_err(|e| Error::path_unresolvable(&shown, e))?;
+    if !meta.file_type().is_block_device() {
+        return Err(invalid(
+            format!("{flag} '{shown}' is not a block device"),
+            "pass the partition's device, such as /dev/vda2 (recpart apply reports it)",
+        ));
+    }
+    let rdev = meta.rdev();
+    Ok((libc::major(rdev), libc::minor(rdev)))
 }

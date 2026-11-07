@@ -7,7 +7,7 @@
 //! printed.
 
 use recinit::live::ROOTFS_SEARCH_PATHS;
-use install_tools::guard::{is_protected_path, is_root};
+use install_tools::guard::{host_system_filesystem_holding, is_protected_path, is_root};
 use install_tools::error::{Error, Result};
 use std::fs::File;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
@@ -83,9 +83,9 @@ pub struct Guard {
 
 pub const GUARDS: &[Guard] = &[
     Guard { check: not_protected, waiver: None },
+    Guard { check: not_on_host_root_fs, waiver: Some(Waiver::HostRootFs) },
     Guard { check: running_as_root, waiver: None },
     Guard { check: writable, waiver: None },
-    Guard { check: not_on_host_root_fs, waiver: Some(Waiver::HostRootFs) },
     Guard { check: mount_point, waiver: Some(Waiver::NonMountpoint) },
     Guard { check: empty, waiver: Some(Waiver::Nonempty) },
     Guard { check: enough_space, waiver: None },
@@ -96,7 +96,6 @@ pub const GUARDS: &[Guard] = &[
     Guard { check: kernel_has_erofs, waiver: None },
 ];
 
-/// Run every guard in order; the first failure stops the run.
 /// Run every check that is not waived; returns the rootfs image they found.
 pub fn run_all(inputs: &Inputs) -> Result<&Path> {
     for guard in GUARDS {
@@ -142,15 +141,17 @@ fn writable(inputs: &Inputs) -> Result<()> {
     Ok(())
 }
 
-/// Protects the running system's root filesystem from `--force`. Compares
-/// device IDs, not paths. Weakened by: letting `--force` imply the waiver.
-/// Consequence: a rootfs copied over live host directories.
+/// Protects the running system's filesystems from `--force`: the target must
+/// not be on the filesystem mounted at `/` or at any other host system
+/// directory (`/home`, `/usr`, `/var`, `/boot`, ...). Decided by the mount
+/// table's device numbers, not `st_dev`, which differs per btrfs subvolume
+/// (Fedora's `/home`) and so let `--force ~/x` through. Needs no privilege,
+/// so it runs before the root check. Weakened by: letting `--force` imply the
+/// waiver, or comparing `st_dev` with `/` only. Consequence: a rootfs copied
+/// over live host directories.
 fn not_on_host_root_fs(inputs: &Inputs) -> Result<()> {
-    let target = std::fs::metadata(&inputs.target)
-        .map_err(|e| Error::path_unresolvable(&inputs.target_str(), e))?;
-    let root = std::fs::metadata("/").map_err(|e| Error::path_unresolvable("/", e))?;
-    if target.dev() == root.dev() {
-        return Err(Error::on_host_root_filesystem(&inputs.target_str()));
+    if let Some(system_dir) = host_system_filesystem_holding(&inputs.target)? {
+        return Err(Error::on_host_root_filesystem(&inputs.target_str(), system_dir));
     }
     Ok(())
 }

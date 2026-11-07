@@ -1,21 +1,27 @@
 //! Mount, run a child, and always clean up.
 //!
 //! A `Session` is the one owner of everything the install tools mount or
-//! create on the host. While it lives, SIGINT/SIGTERM/SIGQUIT are ignored by
-//! the tool (children get the default dispositions back), so an interrupt
-//! stops the child and the session still undoes its work. `close` unmounts in
-//! reverse order, removes what it created, restores the signal dispositions
-//! and reports any failure; dropping an unclosed session does the same and
-//! prints the failures.
+//! create on the host. Beginning one moves the process into a private mount
+//! namespace (see `enter_private_mount_namespace`), so whatever it mounts
+//! disappears when the process and its children are gone, however they die
+//! (SIGKILL included), and never propagates to or from the host. While it
+//! lives, SIGHUP/SIGINT/SIGTERM/SIGQUIT are ignored by the tool (children get
+//! the default dispositions back), so a hangup or interrupt stops the child
+//! and the session still undoes its work. `close` unmounts in reverse order,
+//! removes what it created, restores the signal dispositions and reports any
+//! failure; dropping an unclosed session does the same and prints the
+//! failures.
 
 use crate::error::{Error, Result};
+use crate::guard::is_root;
 use nix::mount::{mount, umount2, MntFlags, MsFlags};
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const HANDLED_SIGNALS: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGQUIT];
+const HANDLED_SIGNALS: [libc::c_int; 4] =
+    [libc::SIGHUP, libc::SIGINT, libc::SIGTERM, libc::SIGQUIT];
 
 pub struct Session {
     tool: &'static str,
@@ -27,20 +33,21 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn begin(tool: &'static str) -> Self {
+    pub fn begin(tool: &'static str) -> Result<Self> {
+        enter_private_mount_namespace(tool)?;
         let previous_signals = HANDLED_SIGNALS
             .iter()
             // SAFETY: installing SIG_IGN runs no handler code.
             .map(|&sig| (sig, unsafe { libc::signal(sig, libc::SIG_IGN) }))
             .collect();
-        Self {
+        Ok(Self {
             tool,
             mounts: Vec::new(),
             created_files: Vec::new(),
             created_dirs: Vec::new(),
             previous_signals,
             closed: false,
-        }
+        })
     }
 
     /// A fresh private (0700) directory, removed again when the session ends.
@@ -64,7 +71,8 @@ impl Session {
     }
 
     /// Bind-mount a directory tree. Recursive binds are made slaves so mounts
-    /// and unmounts inside never propagate back to the host.
+    /// and unmounts inside never propagate back to the host (already true in
+    /// the session's private namespace; this covers running without one).
     pub fn bind_dir(&mut self, source: &Path, target: &Path) -> Result<()> {
         refuse_symlink(target)?;
         if !target.exists() {
@@ -202,6 +210,46 @@ impl Drop for Session {
             }
         }
     }
+}
+
+/// Give this process a mount namespace of its own: unshare(CLONE_NEWNS), then
+/// make every mount in it private. The namespace starts as a copy of the
+/// host's, so mounts the host already has (the target at /mnt, its /boot)
+/// stay visible and writes to them reach the disk; but mounts made here are
+/// not seen by the host, and they are torn down by the kernel when the last
+/// process in the namespace exits. Children (chroot, mount, cp) inherit it, so
+/// a mount lives exactly as long as the tool or the command it runs. Nothing
+/// mounted inside a session outlives it, a mount made by the chrooted command
+/// included.
+///
+/// Without the privilege (EPERM: not root, or a container that forbids it)
+/// the session goes on in the host's namespace, as before: mounting needs the
+/// same privilege, so it fails later with its own error. Any other failure
+/// stops the session before it mounts anything; a namespace whose mounts are
+/// still shared with the host would make the binds leak into it.
+fn enter_private_mount_namespace(tool: &str) -> Result<()> {
+    // SAFETY: unshare has no memory-safety preconditions; the tools are
+    // single-threaded when a session begins.
+    if unsafe { libc::unshare(libc::CLONE_NEWNS) } != 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::EPERM) {
+            if is_root() {
+                eprintln!(
+                    "{tool}: warning: no private mount namespace ({err}); if {tool} is killed, its mounts stay behind"
+                );
+            }
+            return Ok(());
+        }
+        return Err(Error::private_namespace_failed(err));
+    }
+    mount(
+        None::<&str>,
+        "/",
+        None::<&str>,
+        MsFlags::MS_REC | MsFlags::MS_PRIVATE,
+        None::<&str>,
+    )
+    .map_err(Error::private_namespace_failed)
 }
 
 /// Refuse mount targets that are symlinks: mounting would follow the link and

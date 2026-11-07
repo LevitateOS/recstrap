@@ -44,6 +44,7 @@ pub enum Code {
     PasswordInput = 32,
     BootFileMissing = 33,
     UnsafeTargetPath = 34,
+    BootDeviceMismatch = 35,
 }
 
 impl Code {
@@ -225,6 +226,13 @@ impl Error {
         )
     }
 
+    pub fn private_namespace_failed(cause: impl fmt::Display) -> Self {
+        Self::new(
+            Code::MountFailed,
+            format!("cannot give the session a private mount namespace: {cause}"),
+        )
+    }
+
     pub fn unmount_failed(target: &Path, cause: impl fmt::Display) -> Self {
         Self::new(
             Code::UnmountFailed,
@@ -257,11 +265,18 @@ impl Error {
         )
     }
 
-    pub fn on_host_root_filesystem(path: &str) -> Self {
+    /// `system_dir` is the host directory (`/`, `/home`, ...) whose
+    /// filesystem also holds `path`.
+    pub fn on_host_root_filesystem(path: &str, system_dir: &str) -> Self {
+        let filesystem = if system_dir == "/" {
+            "the host's root filesystem".to_string()
+        } else {
+            format!("the filesystem the host has mounted at '{system_dir}'")
+        };
         Self::new(
             Code::OnHostRootFilesystem,
             format!(
-                "'{path}' is on the host's root filesystem (mount the target partition, or pass --allow-host-root-fs)"
+                "'{path}' is on {filesystem} (mount the target partition, or pass --allow-host-root-fs)"
             ),
         )
     }

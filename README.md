@@ -31,6 +31,14 @@ recstrap --allow-non-mountpoint --allow-nonempty /mnt
 3. Mounts EROFS read-only and copies files into target
 4. Verifies extraction
 
+The image is mounted in a private mount namespace that recstrap enters before
+mounting (as recchroot does): the mount is never visible to the host and
+disappears with the process, so even a killed recstrap (SIGKILL, a dropped SSH
+session) leaves no loop mount behind. A hangup (SIGHUP), like an interrupt,
+stops the copy and recstrap then unmounts and removes its directory itself.
+Without the privilege to create the namespace (not root) recstrap runs as
+before in the host's namespace.
+
 ## What recstrap Does NOT Do
 
 - Partitioning → you run `fdisk`
@@ -52,7 +60,7 @@ This is intentional. Manual install like Arch.
 | 5 | Path canonicalized | No |
 | 6 | Not protected path | **Never** |
 | 7 | Target writable | No |
-| 8 | Not on the host's root filesystem | `--allow-host-root-fs` (never implied by `--force`) |
+| 8 | Not on a host system filesystem | `--allow-host-root-fs` (never implied by `--force`) |
 | 9 | Is mount point | `--allow-non-mountpoint` or `--force` |
 | 10 | Target empty | `--allow-nonempty` or `--force` |
 | 11 | Sufficient space (2GB) | No |
@@ -60,6 +68,14 @@ This is intentional. Manual install like Arch.
 | 13 | Rootfs is file | No |
 | 14 | Rootfs readable | No |
 | 15 | Not recursive | No |
+
+Check 8 refuses a target on the filesystem the host has mounted at `/` or at
+any of the protected paths below that exist (`/home`, `/usr`, `/var`, `/boot`,
+`/tmp`, ...). recstrap finds the mount that holds the target in
+`/proc/self/mountinfo` and compares the filesystems' device numbers, so a
+separate `/home` partition and a btrfs `/home` subvolume of the root filesystem
+(Fedora) are both caught: `recstrap --force ~/x` fails with E026. It needs no
+privilege and runs right after the protected-path check, before the root check.
 
 ## Protected Paths (Cannot Override)
 
@@ -96,6 +112,15 @@ and test helpers are a separate overlay and are never deployed by recstrap.
 
 `recsetup` validates user choices and invokes that target-side setup program for
 timezone, locale, keymap, hostname, accounts, machine identity and services.
+Each step that runs in the target goes through its own `recchroot`, so no mount
+outlives the step.
+
+For `--boot`, `recsetup plan` (and so `apply`) requires the installed system's
+root partition to be mounted exactly at `--root` (E011 otherwise) and checks the
+boot devices against it, comparing device numbers so `/dev/disk/by-*` names and
+other symlinks work: `--root-device` (mutable) or `--slot-a` (A/B) must be the
+partition mounted at `--root`, and `--slot-b` must not be (E035). The ESP may
+be on another disk.
 Passwords are supplied only at installation. This works offline without shipping
 a compiler image or Ginux build runtime on the live ISO. Storage inspection,
 ESP deployment and boot activation remain operations of the install tools and
