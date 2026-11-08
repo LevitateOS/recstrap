@@ -79,9 +79,8 @@ pub struct BootRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kernel: Option<PathBuf>,
     /// Initramfs to install; unset takes the installed system's initramfs the
-    /// live media carries (`boot/initramfs-installed.img`) on systemd systems
-    /// and none on OpenRC ones (they boot without one). An empty string means
-    /// none. The live media's own `boot/initramfs.img` is refused: it boots
+    /// live media carries (`boot/initramfs-installed.img`). An empty string
+    /// means none. The live media's own `boot/initramfs.img` is refused: it boots
     /// only the live medium.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initrd: Option<PathBuf>,
@@ -106,7 +105,7 @@ pub struct RequestFlags {
     /// Console keymap, such as de
     #[arg(long)]
     pub keymap: Option<String>,
-    /// Hostname, such as levitate-pc
+    /// Hostname, such as my-pc
     #[arg(long)]
     pub hostname: Option<String>,
     /// Set root's password, read from stdin at apply
@@ -130,7 +129,7 @@ pub struct RequestFlags {
     /// Kernel image (default: the live media's)
     #[arg(long)]
     pub kernel: Option<PathBuf>,
-    /// Initramfs image (default: the live media's boot/initramfs-installed.img on systemd systems, none on OpenRC)
+    /// Initramfs image (default: the live media's boot/initramfs-installed.img)
     #[arg(long, conflicts_with = "no_initrd")]
     pub initrd: Option<PathBuf>,
     /// Boot without an initramfs
@@ -247,7 +246,7 @@ pub fn check_hostname(name: &str) -> Result<()> {
     if name.is_empty() || name.len() > 64 || !name.split('.').all(label_ok) {
         return Err(invalid(
             format!("'{name}' is not a valid hostname"),
-            "use letters, digits and hyphens (not first or last), at most 64 characters, such as levitate-pc",
+            "use letters, digits and hyphens (not first or last), at most 64 characters, such as my-pc",
         ));
     }
     Ok(())

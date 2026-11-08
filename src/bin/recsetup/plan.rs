@@ -455,7 +455,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
             argv.extend(["--options".into(), options.trim().to_string()]);
         }
         let what = match boot.mode {
-            InstallMode::Ab => "Install systemd-boot, write both slots' boot entries, slot A's kernel and recab's state, and enable the trial service",
+            InstallMode::Ab => "Install systemd-boot, write both slots' boot entries, slot A's kernel and recab's state",
             InstallMode::Mutable => "Install systemd-boot, the kernel and the boot entry",
         };
         b.push(Section::Boot, what, Action::Host { argv });

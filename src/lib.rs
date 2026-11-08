@@ -1,4 +1,4 @@
-//! Shared code for the LevitateOS install tools (`recstrap`, `recchroot`, `recfstab`, `recsetup`).
+//! Shared code for the install tools (`recstrap`, `recchroot`, `recfstab`, `recsetup`).
 
 #[cfg(feature = "contracts")]
 pub mod contract;

@@ -1,4 +1,4 @@
-//! recstrap - LevitateOS system extractor
+//! recstrap - system extractor
 //!
 //! Like pacstrap for Arch Linux - extracts the EROFS rootfs to target directory.
 //! User does EVERYTHING else manually (partitioning, formatting, fstab, bootloader).
@@ -31,10 +31,10 @@ use rootfs::extract_erofs;
 #[derive(Parser)]
 #[command(name = "recstrap")]
 #[command(version)]
-#[command(about = "Extract LevitateOS rootfs to target directory (like pacstrap)")]
+#[command(about = "Extract the system rootfs to target directory (like pacstrap)")]
 #[command(
-    long_about = "Extracts the LevitateOS EROFS rootfs image to a target directory. \
-    This is the pacstrap equivalent for LevitateOS - it only extracts files; \
+    long_about = "Extracts the EROFS rootfs image to a target directory. \
+    This is the pacstrap equivalent - it only extracts files; \
     the live install docs describe the rest of the installation."
 )]
 struct Args {
