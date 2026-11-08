@@ -8,4 +8,4 @@ authors.workspace = true
 description = "The target-side primitives every install tool (recpart, recstrap, recchroot, recfstab, recsetup, recab) shares: probes, the mount table, blkid, os-release, account files, durable writes, the EROFS probe, command running and the protected-path guard"
 
 [dependencies]
-libc = "0.2"
+libc = { workspace = true }
