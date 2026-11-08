@@ -118,11 +118,12 @@ fn run(args: Args) -> Result<()> {
     let target_str = target.to_string_lossy();
     let rootfs_str = rootfs.to_string_lossy();
 
+    // The checks that ran: every guard not waived.
+    let checks = GUARDS
+        .iter()
+        .filter(|g| !g.waiver.is_some_and(|w| inputs.waived.contains(&w)))
+        .count() as u32;
     if args.check && args.json {
-        let checks = GUARDS
-            .iter()
-            .filter(|g| !g.waiver.is_some_and(|w| inputs.waived.contains(&w)))
-            .count() as u32;
         let event = StrapEvent::Checked {
             schema_version: STRAP_SCHEMA_VERSION,
             target: target_str.into_owned(),
@@ -147,7 +148,7 @@ fn run(args: Args) -> Result<()> {
             eprintln!("Target:    {}", target_str);
             eprintln!("Rootfs:    {}", rootfs_str);
             eprintln!();
-            eprintln!("All {} validation checks passed.", GUARDS.len());
+            eprintln!("All {checks} validation checks passed.");
             eprintln!("Ready to extract. Run without --check to proceed.");
             eprintln!();
         }

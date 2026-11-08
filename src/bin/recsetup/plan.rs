@@ -337,18 +337,16 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                 ));
             }
         }
-        let missing = |what: &str, path: &Path| {
+        // `flag` is the request field's CLI flag (`BootArgs`).
+        let missing = |what: &str, flag: &str, path: &Path| {
             Error::new(
                 Code::BootFileMissing,
                 format!("{what} '{}' does not exist", path.display()),
             )
-            .fix(format!(
-                "pass the {what}'s path with --{}",
-                what.split(' ').next().unwrap_or(what)
-            ))
+            .fix(format!("pass the {what}'s path with {flag}"))
         };
         if !kernel.is_file() {
-            return Err(missing("kernel", &kernel));
+            return Err(missing("kernel", "--kernel", &kernel));
         }
         if let Some(initrd) = &initrd {
             if !initrd.is_file() {
@@ -362,7 +360,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                     )
                     .fix(format!("boot a live ISO that carries {INITRAMFS_INSTALLED_ISO_PATH}, or pass the installed system's initramfs with --initrd"))
                 } else {
-                    missing("initrd", initrd)
+                    missing("initrd", "--initrd", initrd)
                 });
             }
         }
