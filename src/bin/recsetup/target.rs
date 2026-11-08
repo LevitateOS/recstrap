@@ -335,12 +335,12 @@ pub fn locales(root: &Root, libc: Libc) -> Result<Vec<LocaleChoice>> {
 }
 
 /// Where the init system's keymap loader takes its keymaps from: systemd's
-/// vconsole setup loads kbd's, busybox's `loadkmap` service (OpenRC) the binary
-/// ones of kbd-bkeymaps. The system setup program configures the same loader.
+/// vconsole setup and OpenRC's `loadkeys` service both load kbd's. The system
+/// setup program configures the same loader.
 fn keymap_dirs(init: InitSystem) -> &'static [&'static str] {
     match init {
         InitSystem::Systemd => &["usr/lib/kbd/keymaps", "usr/share/kbd/keymaps"],
-        InitSystem::Openrc => &["usr/share/bkeymaps"],
+        InitSystem::Openrc => &["usr/share/keymaps"],
     }
 }
 
@@ -348,7 +348,7 @@ fn keymap_dirs(init: InitSystem) -> &'static [&'static str] {
 pub fn keymap_loader(init: InitSystem) -> &'static str {
     match init {
         InitSystem::Systemd => "usr/lib/systemd/systemd-vconsole-setup",
-        InitSystem::Openrc => "etc/init.d/loadkmap",
+        InitSystem::Openrc => "etc/init.d/loadkeys",
     }
 }
 
@@ -372,8 +372,7 @@ fn collect_keymaps(dir: &Path, out: &mut BTreeSet<String>) {
                 collect_keymaps(&entry.path(), out);
             }
         } else if let Some(stem) = name
-            .strip_suffix(".bmap.gz")
-            .or_else(|| name.strip_suffix(".map.gz"))
+            .strip_suffix(".map.gz")
             .or_else(|| name.strip_suffix(".map"))
         {
             out.insert(stem.to_string());
