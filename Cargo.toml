@@ -13,8 +13,9 @@ path = "src/lib.rs"
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
-recinit = { path = "../recinit" }
+recinit = { path = "../recinit", default-features = false }
 distro-profile = { path = "../../distro/profile" }
+recpart = { path = "../recpart" }
 target-root = { path = "target-root" }
 libc = "0.2"
 nix = { version = "0.29", features = ["mount", "signal", "user"] }

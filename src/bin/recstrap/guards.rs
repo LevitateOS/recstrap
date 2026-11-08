@@ -14,7 +14,6 @@ use std::io::ErrorKind;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 /// A rootfs expands to roughly this much; checked up front so a full disk
 /// fails before extraction starts rather than half-way through. The exact
@@ -282,24 +281,15 @@ fn rootfs_is_erofs(inputs: &Inputs) -> Result<()> {
     }
 }
 
-/// Protects against a cryptic "unknown filesystem type" at mount time. EROFS
-/// counts as available when the kernel has it or can load it (`modprobe -n`
-/// changes nothing; the mount itself loads the module).
+/// Protects against a cryptic "unknown filesystem type" at mount time. The
+/// live protocol requires EROFS built into the kernel (the live root is
+/// EROFS), so the kernel lists it in /proc/filesystems; nothing is loaded.
 fn kernel_has_erofs(_: &Inputs) -> Result<()> {
     let built_in = std::fs::read_to_string("/proc/filesystems")
         .map_err(|e| Error::path_unresolvable("/proc/filesystems", e))?
         .lines()
         .any(|line| line.split_whitespace().last() == Some("erofs"));
     if built_in {
-        return Ok(());
-    }
-    let loadable = Command::new("modprobe")
-        .args(["-n", "-q", "erofs"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|e| Error::tool_missing("modprobe", "kmod", e))?;
-    if loadable.success() {
         Ok(())
     } else {
         Err(Error::erofs_not_supported())

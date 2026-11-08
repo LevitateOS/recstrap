@@ -60,14 +60,8 @@ pub struct UserRequest {
     pub password: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
-#[serde(rename_all = "snake_case")]
-pub enum BootMode {
-    /// Two root slots managed by recab.
-    Ab,
-    /// One root and one boot entry.
-    Mutable,
-}
+/// The install mode recpart partitioned the disk for.
+pub use recpart::types::InstallMode as BootMode;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

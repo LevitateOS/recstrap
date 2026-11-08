@@ -42,17 +42,10 @@ impl Root {
 
     /// The host path of `target_path`, all symlinks resolved inside the root.
     pub fn resolve(&self, target_path: &str) -> Result<PathBuf> {
-        self.walk(target_path, true)
+        self.walk(target_path)
     }
 
-    /// The host path of `target_path` with its parent directories resolved
-    /// but its last component left as it is (a symlink there is not
-    /// followed), for creating, replacing or removing that entry.
-    pub fn resolve_entry(&self, target_path: &str) -> Result<PathBuf> {
-        self.walk(target_path, false)
-    }
-
-    fn walk(&self, target_path: &str, follow_last: bool) -> Result<PathBuf> {
+    fn walk(&self, target_path: &str) -> Result<PathBuf> {
         let mut queue: VecDeque<OsString> = components(Path::new(target_path));
         let mut current: Vec<OsString> = Vec::new();
         let mut hops = 0;
@@ -61,14 +54,9 @@ impl Root {
                 current.pop();
                 continue;
             }
-            let is_last = queue.is_empty();
             let mut candidate = self.path.clone();
             candidate.extend(&current);
             candidate.push(&part);
-            if is_last && !follow_last {
-                current.push(part);
-                break;
-            }
             match fs::symlink_metadata(&candidate) {
                 Ok(meta) if meta.file_type().is_symlink() => {
                     hops += 1;
@@ -135,16 +123,6 @@ fn components(path: &Path) -> VecDeque<OsString> {
         .collect()
 }
 
-/// How systemd-boot gets onto the ESP.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BootloaderMethod {
-    /// `bootctl install` in the target (systemd systems).
-    Bootctl,
-    /// Copy the EFI binary into place (no bootctl without systemd).
-    Copy,
-}
-
 /// The administrator setup: members of `group` get root through `tool`.
 #[derive(Debug, Clone, Serialize)]
 pub struct Admin {
@@ -165,9 +143,6 @@ pub struct Target {
     /// The distro profile from the target's os-release.
     pub profile: Profile,
     pub admin: Admin,
-    pub bootloader: Option<BootloaderMethod>,
-    /// systemd-boot's EFI binary in the target, when it has one.
-    pub systemd_boot_efi: Option<String>,
     /// The time zone database is installed (without it only UTC exists).
     pub has_zoneinfo: bool,
     /// The shell of new users: root's login shell in the target.
@@ -203,19 +178,6 @@ pub fn detect(root: &Root) -> Result<Target> {
             .is_some_and(|text| text.lines().any(|line| line.trim() == rule)),
     };
 
-    let efi_name = match std::env::consts::ARCH {
-        "aarch64" => "systemd-bootaa64.efi",
-        _ => "systemd-bootx64.efi",
-    };
-    let systemd_boot_efi = Some(format!("usr/lib/systemd/boot/efi/{efi_name}")).filter(|p| root.is_file(p));
-    let bootloader = if profile.init == InitSystem::Systemd && root.has_program("bootctl") {
-        Some(BootloaderMethod::Bootctl)
-    } else if systemd_boot_efi.is_some() {
-        Some(BootloaderMethod::Copy)
-    } else {
-        None
-    };
-
     let default_shell = target_root::root_shell(&root.read("etc/passwd")?.unwrap_or_default());
 
     let top = fs::metadata(root.path()).map_err(|e| Error::path_unresolvable(&root.path().to_string_lossy(), e))?;
@@ -232,8 +194,6 @@ pub fn detect(root: &Root) -> Result<Target> {
         os_name,
         profile,
         admin,
-        bootloader,
-        systemd_boot_efi: systemd_boot_efi.map(|p| format!("/{p}")),
         has_zoneinfo: root.is_dir(ZONEINFO),
         default_shell,
         boot_is_mountpoint,

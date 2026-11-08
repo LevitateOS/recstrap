@@ -193,7 +193,7 @@ impl Error {
     pub fn erofs_not_supported() -> Self {
         Self::new(
             Code::ErofsNotSupported,
-            "EROFS filesystem not supported by kernel (try: modprobe erofs)",
+            "the running kernel has no EROFS (it is not in /proc/filesystems); boot a kernel with EROFS built in",
         )
     }
 

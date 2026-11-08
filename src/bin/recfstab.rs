@@ -12,22 +12,28 @@ use std::process::ExitCode;
 #[command(about = "Generate fstab from mounted filesystems (like genfstab)")]
 #[command(
     long_about = "Reads mounted filesystems under a root directory and outputs \
-    fstab entries with UUIDs (or LABELs/PARTUUIDs/PARTLABELs). Designed for system \
+    fstab entries naming each partition by PARTUUID (or filesystem UUID/LABEL, or PARTLABEL). \
+    PARTUUID is what the boot entries name the root by, and it survives the reformat an A/B \
+    update makes. Designed for system \
     installation workflows where you need to generate /etc/fstab for a newly installed system."
 )]
 struct Args {
     /// Root directory to scan for mounted filesystems (e.g., /mnt)
     root: String,
 
-    /// Use filesystem LABEL instead of UUID for device identification
+    /// Use filesystem LABEL instead of PARTUUID for device identification
     #[arg(short = 'L', long, group = "id")]
     label: bool,
 
-    /// Use partition UUID (PARTUUID) instead of filesystem UUID
+    /// Use the filesystem UUID instead of PARTUUID
+    #[arg(short = 'U', long, group = "id")]
+    uuid: bool,
+
+    /// Use partition UUID (PARTUUID), the default
     #[arg(short = 'p', long, group = "id")]
     partuuid: bool,
 
-    /// Use partition LABEL (PARTLABEL) instead of filesystem UUID
+    /// Use partition LABEL (PARTLABEL) instead of PARTUUID
     #[arg(short = 't', long, group = "id")]
     partlabel: bool,
 
@@ -51,12 +57,12 @@ fn main() -> ExitCode {
 
     let id_type = if args.label {
         IdType::Label
-    } else if args.partuuid {
-        IdType::Partuuid
+    } else if args.uuid {
+        IdType::Uuid
     } else if args.partlabel {
         IdType::Partlabel
     } else {
-        IdType::Uuid
+        IdType::Partuuid
     };
 
     let write = match (args.write, args.replace) {

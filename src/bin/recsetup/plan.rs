@@ -2,20 +2,20 @@
 //! apply runs. Each step carries the exact command it stands for, so the
 //! plan is also the manual install for anyone who would rather type it.
 
-use crate::request::{check_hostname, check_username, invalid, BootMode, SetupRequest};
-use crate::target::{self, BootloaderMethod, Root, Target};
+use crate::request::{check_hostname, check_username, invalid, SetupRequest};
+use crate::target::{self, Root, Target};
 use distro_profile::InitSystem;
 use install_tools::error::{Code, Error, Result};
 use target_root::mount_table;
-use recinit::live::LIVE_MEDIA_DIR;
+use recinit::live::{
+    INITRAMFS_INSTALLED_ISO_PATH, INITRAMFS_LIVE_ISO_PATH, KERNEL_ISO_PATH, LIVE_MEDIA_DIR,
+};
+use recpart::types::InstallMode;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 pub const PLAN_SCHEMA_VERSION: u32 = 1;
 const SETUP_PROGRAM: &str = "/usr/libexec/recipe-system-setup";
-/// The installed system's initramfs on the live medium, next to the live one
-/// (`boot/initramfs.img`); the release build puts it there for systemd variants.
-const INSTALLED_INITRAMFS: &str = "initramfs-installed.img";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,27 +26,15 @@ pub enum Section {
     Hostname,
     Users,
     Passwords,
-    Bootloader,
-    BootEntries,
+    /// systemd-boot, the boot entries and the installed kernel (recab init).
+    Boot,
     MachineId,
     Services,
 }
 
-/// What a step does. Paths are target paths ("/etc/hostname"), resolved
-/// inside the root when the step runs.
+/// What a step does.
 #[derive(Debug, Clone)]
 pub enum Action {
-    Write {
-        path: String,
-        content: String,
-        mode: u32,
-    },
-    /// Copy a file from the host (or, for `from_target`, from the target) into the target.
-    Copy {
-        from: PathBuf,
-        from_target: bool,
-        to: String,
-    },
     /// Run in the target through recchroot; `passwords` feeds it the
     /// `name:password` lines read from stdin.
     Chroot { argv: Vec<String>, passwords: bool },
@@ -61,9 +49,6 @@ pub struct Step {
     pub description: String,
     /// The shell command this step is.
     pub command: String,
-    /// The full text of a file the step writes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
     #[serde(skip)]
     pub action: Action,
 }
@@ -102,27 +87,6 @@ fn shell_line(argv: &[String]) -> String {
         .join(" ")
 }
 
-/// `default`-style systemd-boot loader.conf keys (`key value`).
-fn set_loader_key(existing: Option<&str>, key: &str, value: &str) -> String {
-    let mut out = String::new();
-    let mut replaced = false;
-    for line in existing.unwrap_or("").lines() {
-        if line.split_whitespace().next() == Some(key) {
-            if !replaced {
-                out.push_str(&format!("{key} {value}\n"));
-                replaced = true;
-            }
-        } else {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    if !replaced {
-        out.push_str(&format!("{key} {value}\n"));
-    }
-    out
-}
-
 struct Builder<'a> {
     root: &'a Root,
     steps: Vec<Step>,
@@ -131,63 +95,19 @@ struct Builder<'a> {
 impl Builder<'_> {
     fn push(&mut self, section: Section, description: impl Into<String>, action: Action) {
         let root = self.root;
-        let (command, content) = match &action {
-            Action::Write {
-                path,
-                content,
-                mode,
-            } => {
-                let shown = root.display(path);
-                let mkdir = if root.is_dir(&parent_of(path)) {
-                    String::new()
-                } else {
-                    format!("mkdir -p {} && ", shell_quote(&parent_of(&shown)))
-                };
-                let mut command = format!(
-                    "{mkdir}cat > {} <<'EOF'\n{}EOF",
-                    shell_quote(&shown),
-                    content
-                );
-                if *mode != 0o644 {
-                    command.push_str(&format!("\nchmod {mode:04o} {}", shell_quote(&shown)));
-                }
-                (command, Some(content.clone()))
-            }
-            Action::Copy {
-                from,
-                from_target,
-                to,
-            } => {
-                let from = if *from_target {
-                    root.display(&from.to_string_lossy())
-                } else {
-                    from.display().to_string()
-                };
-                (
-                    format!(
-                        "install -D -m 0644 {} {}",
-                        shell_quote(&from),
-                        shell_quote(&root.display(to))
-                    ),
-                    None,
-                )
-            }
-            Action::Chroot { argv, .. } => (
-                format!(
-                    "recchroot {} -- {}",
-                    shell_quote(&root.path().to_string_lossy()),
-                    shell_line(argv)
-                ),
-                None,
+        let command = match &action {
+            Action::Chroot { argv, .. } => format!(
+                "recchroot {} -- {}",
+                shell_quote(&root.path().to_string_lossy()),
+                shell_line(argv)
             ),
-            Action::Host { argv } => (shell_line(argv), None),
+            Action::Host { argv } => shell_line(argv),
         };
         self.steps.push(Step {
             index: self.steps.len() + 1,
             section,
             description: description.into(),
             command,
-            content,
             action,
         });
     }
@@ -204,25 +124,6 @@ impl Builder<'_> {
             },
         );
     }
-
-    fn chroot(&mut self, section: Section, description: impl Into<String>, argv: &[&str]) {
-        let argv = argv.iter().map(|s| s.to_string()).collect();
-        self.push(
-            section,
-            description,
-            Action::Chroot {
-                argv,
-                passwords: false,
-            },
-        );
-    }
-}
-
-fn parent_of(path: &str) -> String {
-    Path::new(path)
-        .parent()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "/".to_string())
 }
 
 fn unavailable(message: impl Into<String>, fix: impl Into<String>) -> Error {
@@ -404,16 +305,16 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
     }
 
     if let Some(boot) = &request.boot {
-        let live = |file: &str| PathBuf::from(format!("{LIVE_MEDIA_DIR}/boot/{file}"));
-        let kernel = boot.kernel.clone().unwrap_or_else(|| live("vmlinuz"));
+        let live = |path: &str| PathBuf::from(format!("{LIVE_MEDIA_DIR}/{path}"));
+        let kernel = boot.kernel.clone().unwrap_or_else(|| live(KERNEL_ISO_PATH));
         // The live medium's own initramfs (boot/initramfs.img) only finds the live
         // medium; the installed system boots through the one built from its rootfs,
         // which the ISO carries beside it.
-        let live_initramfs = live("initramfs.img");
+        let live_initramfs = live(INITRAMFS_LIVE_ISO_PATH);
         let initrd = match &boot.initrd {
             Some(path) if path.as_os_str().is_empty() => None,
             Some(path) => Some(path.clone()),
-            None if target.profile.init == InitSystem::Systemd => Some(live(INSTALLED_INITRAMFS)),
+            None if target.profile.init == InitSystem::Systemd => Some(live(INITRAMFS_INSTALLED_ISO_PATH)),
             None => None,
         };
         if let Some(initrd) = &initrd {
@@ -431,7 +332,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                     ),
                     format!(
                         "pass the installed system's initramfs ({}), or leave --initrd out to use it",
-                        live(INSTALLED_INITRAMFS).display()
+                        live(INITRAMFS_INSTALLED_ISO_PATH).display()
                     ),
                 ));
             }
@@ -459,7 +360,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                             initrd.display()
                         ),
                     )
-                    .fix("boot a live ISO that carries boot/initramfs-installed.img, or pass the installed system's initramfs with --initrd")
+                    .fix(format!("boot a live ISO that carries {INITRAMFS_INSTALLED_ISO_PATH}, or pass the installed system's initramfs with --initrd"))
                 } else {
                     missing("initrd", initrd)
                 });
@@ -479,36 +380,11 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
             ));
         }
 
-        match target.bootloader {
-            Some(BootloaderMethod::Bootctl) => b.chroot(
-                Section::Bootloader,
-                "Install systemd-boot on the ESP (firmware variables are left to recab and the first boot)",
-                &["bootctl", "install", "--esp-path=/boot", "--no-variables"],
-            ),
-            Some(BootloaderMethod::Copy) => {
-                let efi = PathBuf::from(target.systemd_boot_efi.clone().expect("Copy is chosen only with the EFI binary"));
-                let name = efi.file_name().unwrap().to_string_lossy().into_owned();
-                let fallback = if name.contains("aa64") { "BOOTAA64.EFI" } else { "BOOTX64.EFI" };
-                b.push(
-                    Section::Bootloader,
-                    "Install systemd-boot as the firmware's default loader",
-                    Action::Copy { from: efi.clone(), from_target: true, to: format!("/boot/EFI/BOOT/{fallback}") },
-                );
-                b.push(
-                    Section::Bootloader,
-                    "Install systemd-boot under its own name",
-                    Action::Copy { from: efi, from_target: true, to: format!("/boot/EFI/systemd/{name}") },
-                );
-            }
-            None => {
-                return Err(Error::new(Code::BootFileMissing, "the target has no systemd-boot (no bootctl and no systemd-boot EFI binary)")
-                    .fix("extract a complete system (recstrap) first"))
-            }
-        }
-
         let options = boot.options.clone().unwrap_or_default();
+        let mut argv: Vec<String> =
+            ["recab", "init", "--root", &r, "--mode", &boot.mode.to_string()].iter().map(|s| s.to_string()).collect();
         match boot.mode {
-            BootMode::Ab => {
+            InstallMode::Ab => {
                 if boot.root_device.is_some() {
                     return Err(invalid(
                         "root_device is for the mutable layout",
@@ -539,30 +415,10 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                     )
                     .fix("pass the other slot's partition as --slot-b (recpart apply reports both)"));
                 }
-                let mut argv: Vec<String> = ["recab", "init", "--root", &r, "--slot-a"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect();
-                argv.push(a.display().to_string());
-                argv.push("--slot-b".into());
-                argv.push(b_dev.display().to_string());
-                argv.push("--kernel".into());
-                argv.push(kernel.display().to_string());
-                if let Some(initrd) = &initrd {
-                    argv.push("--initrd".into());
-                    argv.push(initrd.display().to_string());
-                }
-                if !options.trim().is_empty() {
-                    argv.push("--options".into());
-                    argv.push(options.trim().to_string());
-                }
-                b.push(
-                    Section::BootEntries,
-                    "Write both slots' boot entries, slot A's kernel and recab's state, and enable the trial service",
-                    Action::Host { argv },
-                );
+                argv.extend(["--slot-a".into(), a.display().to_string()]);
+                argv.extend(["--slot-b".into(), b_dev.display().to_string()]);
             }
-            BootMode::Mutable => {
+            InstallMode::Mutable => {
                 if boot.slot_a.is_some() || boot.slot_b.is_some() {
                     return Err(invalid(
                         "slot devices are for the A/B layout",
@@ -576,71 +432,22 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                     ));
                 };
                 RootMount::of(root.path())?.require("--root-device", device)?;
-                let partuuid = partuuid(device)?;
-                b.push(
-                    Section::BootEntries,
-                    "Install the kernel on the ESP",
-                    Action::Copy {
-                        from: kernel,
-                        from_target: false,
-                        to: "/boot/vmlinuz".into(),
-                    },
-                );
-                if let Some(initrd) = &initrd {
-                    b.push(
-                        Section::BootEntries,
-                        "Install the initramfs on the ESP",
-                        Action::Copy {
-                            from: initrd.clone(),
-                            from_target: false,
-                            to: "/boot/initramfs.img".into(),
-                        },
-                    );
-                }
-                let mut entry = format!("title {}\nlinux /vmlinuz\n", target.os_name);
-                if initrd.is_some() {
-                    entry.push_str("initrd /initramfs.img\n");
-                }
-                let extra = if options.trim().is_empty() {
-                    String::new()
-                } else {
-                    format!(" {}", options.trim())
-                };
-                entry.push_str(&format!(
-                    "options root=PARTUUID={partuuid} rw rootwait{extra}\n"
-                ));
-                let entry_name = format!("{}.conf", target.os_id);
-                b.push(
-                    Section::BootEntries,
-                    format!(
-                        "Write the boot entry, naming {} by its PARTUUID",
-                        device.display()
-                    ),
-                    Action::Write {
-                        path: format!("/boot/loader/entries/{entry_name}"),
-                        content: entry,
-                        mode: 0o644,
-                    },
-                );
-                let existing = root.read("boot/loader/loader.conf")?;
-                let mut loader = set_loader_key(existing.as_deref(), "default", &entry_name);
-                if !loader
-                    .lines()
-                    .any(|l| l.split_whitespace().next() == Some("timeout"))
-                {
-                    loader = set_loader_key(Some(&loader), "timeout", "5");
-                }
-                b.push(
-                    Section::BootEntries,
-                    "Make it the default entry",
-                    Action::Write {
-                        path: "/boot/loader/loader.conf".into(),
-                        content: loader,
-                        mode: 0o644,
-                    },
-                );
+                partuuid(device)?;
+                argv.extend(["--root-device".into(), device.display().to_string()]);
             }
         }
+        argv.extend(["--kernel".into(), kernel.display().to_string()]);
+        if let Some(initrd) = &initrd {
+            argv.extend(["--initrd".into(), initrd.display().to_string()]);
+        }
+        if !options.trim().is_empty() {
+            argv.extend(["--options".into(), options.trim().to_string()]);
+        }
+        let what = match boot.mode {
+            InstallMode::Ab => "Install systemd-boot, write both slots' boot entries, slot A's kernel and recab's state, and enable the trial service",
+            InstallMode::Mutable => "Install systemd-boot, the kernel and the boot entry",
+        };
+        b.push(Section::Boot, what, Action::Host { argv });
     }
 
     if request.machine_id {

@@ -10,9 +10,7 @@ use install_tools::output::ErrorPayload;
 use install_tools::session::Session;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::fs;
 use std::io::{Read, Write};
-use std::path::Path;
 use std::process::{Command, Stdio};
 
 pub const APPLY_SCHEMA_VERSION: u32 = 1;
@@ -183,16 +181,7 @@ fn read_passwords(users: &[String]) -> Result<String> {
 }
 
 fn run(root: &Root, step: &Step, passwords: Option<&str>) -> std::result::Result<Output, (Error, Output)> {
-    let plain = |r: Result<()>| r.map(|()| None).map_err(|e| (e, None));
     match &step.action {
-        Action::Write { path, content, mode } => plain(write(root, path, content.as_bytes(), *mode)),
-        Action::Copy { from, from_target, to } => plain((|| {
-            let source = if *from_target { root.resolve(&from.to_string_lossy())? } else { from.clone() };
-            let bytes = fs::read(&source).map_err(|e| {
-                Error::new(Code::BootFileMissing, format!("cannot read '{}': {e}", source.display()))
-            })?;
-            write(root, to, &bytes, 0o644)
-        })()),
         Action::Chroot { argv, passwords: wants } => {
             // The chroot recchroot enters: the host's /proc, /sys, /dev, /run
             // and DNS, and the target's own PATH.
@@ -247,16 +236,4 @@ fn exec(mut command: Command, name: &str, stdin: Option<&str>) -> std::result::R
             Some((code, stdout, stderr)),
         )),
     }
-}
-
-
-fn write(root: &Root, path: &str, content: &[u8], mode: u32) -> Result<()> {
-    let host = root.resolve_entry(path)?;
-    let parent = host.parent().map(Path::to_path_buf).unwrap_or_else(|| root.path().to_path_buf());
-    fs::create_dir_all(&parent).map_err(|e| Error::create_failed(&parent, e))?;
-    if fs::symlink_metadata(&host).is_ok_and(|m| m.is_dir()) {
-        return Err(Error::new(Code::UnsafeTargetPath, format!("'{}' is a directory", host.display()))
-            .fix("remove the directory, then run the plan again"));
-    }
-    target_root::write_durable(&host, content, Some(mode)).map_err(|e| Error::create_failed(&host, e))
 }

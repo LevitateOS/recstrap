@@ -217,6 +217,34 @@ pub fn blkid_tag(device: &Path, tag: &str) -> io::Result<Option<String>> {
     Ok((!value.is_empty()).then_some(value))
 }
 
+/// The block device whose blkid `tag` (`PARTUUID`, `UUID`, `LABEL`) is
+/// `value`. blkid probes the kernel's partition list itself (`-c /dev/null`:
+/// no cache), so this needs no udev and no `/dev/disk` links. `None` when no
+/// device has it; the first device when several do.
+pub fn device_with_tag(tag: &str, value: &str) -> io::Result<Option<PathBuf>> {
+    let mut command = Command::new("blkid");
+    command.args(["-c", "/dev/null", "-o", "device", "-t"]).arg(format!("{tag}={value}"));
+    let output = command
+        .output()
+        .map_err(|err| io::Error::new(err.kind(), format!("running 'blkid': {err}")))?;
+    if output.status.code() == Some(2) {
+        return Ok(None);
+    }
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "'{}' failed ({}): {}",
+            command_text(&command),
+            status_text(output.status),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(PathBuf::from))
+}
+
 /// A partition's PARTUUID, lower-case (the spelling every install tool
 /// writes and compares); `None` when it has none (not a GPT partition).
 pub fn partuuid(device: &Path) -> io::Result<Option<String>> {
