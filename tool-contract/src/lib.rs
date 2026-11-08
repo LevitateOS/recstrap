@@ -25,6 +25,11 @@ pub struct Contract {
     pub typescript: String,
     cfg: Config,
     declared: HashSet<std::any::TypeId>,
+    /// The declarations of the `types_from` call in progress. They are
+    /// written sorted, so the module does not depend on the order ts-rs
+    /// visits dependencies in (which changes between builds); TypeScript
+    /// type aliases may refer to ones declared later.
+    pending: Option<Vec<String>>,
 }
 
 /// Declares a type after everything it refers to, once.
@@ -45,6 +50,7 @@ impl Contract {
             typescript: HEADER.to_string(),
             cfg: Config::new().with_large_int("number"),
             declared: HashSet::new(),
+            pending: None,
         }
     }
 
@@ -55,12 +61,23 @@ impl Contract {
         Ok(self)
     }
 
-    /// `T` and every type it refers to, dependencies first.
+    /// `T` and every type it refers to, each once, sorted by name.
     pub fn types_from<T: TS + 'static + ?Sized>(&mut self) -> &mut Self {
+        let outermost = self.pending.is_none();
+        if outermost {
+            self.pending = Some(Vec::new());
+        }
         if T::output_path().is_some() && self.declared.insert(std::any::TypeId::of::<T>()) {
             T::visit_dependencies(&mut Collect(self));
             let decl = T::decl(&self.cfg);
-            self.typescript.push_str(&format!("\nexport {decl}\n"));
+            self.pending.as_mut().expect("set above").push(format!("\nexport {decl}\n"));
+        }
+        if outermost {
+            let mut decls = self.pending.take().expect("set above");
+            decls.sort();
+            for decl in decls {
+                self.typescript.push_str(&decl);
+            }
         }
         self
     }

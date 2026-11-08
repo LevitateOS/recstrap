@@ -318,7 +318,12 @@ pub struct Mount {
 /// This process's mount table, in mount order (a later mount on the same
 /// point covers an earlier one).
 pub fn mount_table() -> io::Result<Vec<Mount>> {
-    let path = Path::new("/proc/self/mountinfo");
+    mount_table_at(Path::new("/proc/self/mountinfo"))
+}
+
+/// The mount table in a `mountinfo` file (`/proc/self/mountinfo`, or a
+/// stand-in a tool's scratch tree provides).
+pub fn mount_table_at(path: &Path) -> io::Result<Vec<Mount>> {
     let text = fs::read_to_string(path).map_err(|err| at(path, err))?;
     text.lines()
         .map(|line| {
