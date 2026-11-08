@@ -425,6 +425,17 @@ pub fn services(root: &Root, init: InitSystem) -> Result<Vec<ServiceChoice>> {
                     }
                 }
             }
+            // The desktop system starts its display manager through the
+            // display-manager.service alias, which the default target wants.
+            let link = |path: &str| {
+                fs::read_link(root.path().join(path)).ok().and_then(|to| to.file_name().map(|n| n.to_string_lossy().into_owned()))
+            };
+            if let Some(unit) = link("etc/systemd/system/display-manager.service") {
+                let default = link("etc/systemd/system/default.target").unwrap_or_else(|| "graphical.target".to_string());
+                if let Some(enabled) = unit.strip_suffix(".service").and_then(|name| services.get_mut(name)) {
+                    enabled.push(default);
+                }
+            }
         }
         InitSystem::Openrc => {
             for name in root.list("etc/init.d")? {
