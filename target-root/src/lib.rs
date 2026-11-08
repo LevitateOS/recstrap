@@ -29,13 +29,37 @@ pub fn read_optional(path: &Path) -> io::Result<Option<String>> {
     }
 }
 
-/// Whether anything (a symlink included) exists at `path`.
-pub fn exists(path: &Path) -> io::Result<bool> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+/// `path`'s bytes; `None` when it does not exist.
+pub fn read_optional_bytes(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
         Err(err) => Err(at(path, err)),
     }
+}
+
+/// `path`'s own metadata (a symlink is not followed); `None` when it does
+/// not exist.
+pub fn metadata(path: &Path) -> io::Result<Option<fs::Metadata>> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => Ok(Some(meta)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(at(path, err)),
+    }
+}
+
+/// `path` with every link resolved; `None` when it does not exist.
+pub fn canonical(path: &Path) -> io::Result<Option<PathBuf>> {
+    match fs::canonicalize(path) {
+        Ok(path) => Ok(Some(path)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(at(path, err)),
+    }
+}
+
+/// Whether anything (a symlink included) exists at `path`.
+pub fn exists(path: &Path) -> io::Result<bool> {
+    Ok(metadata(path)?.is_some())
 }
 
 /// The names in a directory, sorted; empty only when it does not exist.
