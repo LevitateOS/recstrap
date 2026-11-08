@@ -156,26 +156,6 @@ pub fn root_shell(passwd: &str) -> String {
         .to_string()
 }
 
-/// An account file merged by name: `image`'s lines in their order, each
-/// replaced by `own`'s line of the same name, then `own`'s other lines.
-pub fn merge_accounts(image: &str, own: &str) -> String {
-    let name = |line: &str| line.split(':').next().unwrap_or("").to_string();
-    let own_lines: Vec<&str> = own.lines().filter(|l| !l.trim().is_empty()).collect();
-    let mut used = std::collections::HashSet::new();
-    let mut merged: Vec<&str> = Vec::new();
-    for line in image.lines().filter(|l| !l.trim().is_empty()) {
-        let key = name(line);
-        match own_lines.iter().find(|own| name(own) == key) {
-            Some(own) => {
-                used.insert(key);
-                merged.push(own);
-            }
-            None => merged.push(line),
-        }
-    }
-    merged.extend(own_lines.iter().filter(|line| !used.contains(&name(line))));
-    merged.join("\n") + "\n"
-}
 
 // ---- running commands ----
 
