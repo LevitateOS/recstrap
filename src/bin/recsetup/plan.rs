@@ -139,6 +139,21 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
     let r = root.path().display().to_string();
     let inspect_hint =
         |what: &str| format!("choose one that `recsetup inspect --root {r}` lists under {what}");
+    // Homes live in /var/home (the image's /home links there). An A/B
+    // install mounts a fresh STATE partition at /var, which lacks it.
+    b.push(
+        Section::Users,
+        "Create /var/home, where /home points",
+        Action::Host {
+            argv: vec![
+                "install".into(),
+                "-d".into(),
+                "-m".into(),
+                "0755".into(),
+                format!("{r}/var/home"),
+            ],
+        },
+    );
     let personalization = request.timezone.is_some()
         || request.locale.is_some()
         || request.keymap.is_some()
