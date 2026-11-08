@@ -41,13 +41,13 @@ fn test_file_instead_of_directory() {
 }
 
 #[test]
-fn test_missing_findmnt_fails_with_actionable_error() {
+fn test_missing_util_linux_fails_with_actionable_error() {
     let empty_path = tempfile::tempdir().expect("create empty command search path");
     let output = Command::new(env!("CARGO_BIN_EXE_recfstab"))
         .arg("/")
         .env("PATH", empty_path.path())
         .output()
-        .expect("execute the real recfstab binary without findmnt available");
+        .expect("execute the real recfstab binary without util-linux available");
     assert_eq!(output.status.code(), Some(7));
     assert!(
         output.stdout.is_empty(),
@@ -55,7 +55,7 @@ fn test_missing_findmnt_fails_with_actionable_error() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("E007:") && stderr.contains("findmnt") && stderr.contains("util-linux"),
+        stderr.contains("E007:") && stderr.contains("lsblk") && stderr.contains("util-linux"),
         "missing dependency must report the cause and remediation: {stderr}"
     );
 }

@@ -17,7 +17,7 @@ use apply::ApplyOptions;
 use install_tools::output::{to_json, ErrorPayload};
 use clap::{Parser, Subcommand};
 use install_tools::error::{Error, Result};
-use install_tools::guard::is_protected_path;
+use target_root::is_protected_path;
 use install_tools::session::resolve_target;
 use request::RequestFlags;
 use serde::Serialize;
@@ -102,7 +102,7 @@ fn run(command: Commands, json: bool) -> Result<ExitCode> {
         Commands::Inspect { root } => {
             let root = open_root(&root, false)?;
             let target = target::detect(&root)?;
-            let choices = target::choices(&root, &target);
+            let choices = target::choices(&root, &target)?;
             if json {
                 #[derive(Serialize)]
                 struct Inspect<'a> {

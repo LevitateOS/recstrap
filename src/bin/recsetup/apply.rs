@@ -5,14 +5,14 @@
 use crate::plan::{Action, Plan, Step};
 use crate::target::{Root, Target};
 use install_tools::error::{Code, Error, Result};
-use install_tools::guard::is_root;
+use target_root::is_root;
 use install_tools::output::ErrorPayload;
+use install_tools::session::Session;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 pub const APPLY_SCHEMA_VERSION: u32 = 1;
@@ -182,14 +182,6 @@ fn read_passwords(users: &[String]) -> Result<String> {
     Ok(out)
 }
 
-fn recchroot() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("recchroot")))
-        .filter(|p| p.is_file())
-        .unwrap_or_else(|| PathBuf::from("recchroot"))
-}
-
 fn run(root: &Root, step: &Step, passwords: Option<&str>) -> std::result::Result<Output, (Error, Output)> {
     let plain = |r: Result<()>| r.map(|()| None).map_err(|e| (e, None));
     match &step.action {
@@ -202,11 +194,20 @@ fn run(root: &Root, step: &Step, passwords: Option<&str>) -> std::result::Result
             write(root, to, &bytes, 0o644)
         })()),
         Action::Chroot { argv, passwords: wants } => {
-            // recchroot gives the command the target's own PATH.
-            let mut command = Command::new(recchroot());
-            command.arg(root.path()).arg("--").args(argv);
+            // The chroot recchroot enters: the host's /proc, /sys, /dev, /run
+            // and DNS, and the target's own PATH.
+            let mut session = Session::begin("recsetup").map_err(|e| (e, None))?;
+            session.prepare_chroot(root.path()).map_err(|e| (e, None))?;
             let stdin = if *wants { passwords } else { None };
-            exec(command, &argv[0], stdin)
+            let result = exec(session.chroot_command(root.path(), argv), &argv[0], stdin);
+            match (session.close(), result) {
+                (Err(e), Ok(out)) => Err((e, out)),
+                (Err(e), Err(failed)) => {
+                    eprintln!("recsetup: {e}");
+                    Err(failed)
+                }
+                (Ok(()), result) => result,
+            }
         }
         Action::Host { argv } => {
             let mut command = Command::new(&argv[0]);
@@ -222,20 +223,29 @@ fn exec(mut command: Command, name: &str, stdin: Option<&str>) -> std::result::R
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|e| (Error::command_failed(name, e), None))?;
-    if let (Some(input), Some(mut pipe)) = (stdin, child.stdin.take()) {
-        // A child that exits without reading shows up in its status below.
-        let _ = pipe.write_all(input.as_bytes());
-    }
+    // Dropping the pipe closes it, so the child sees the end of its input.
+    let written = match (stdin, child.stdin.take()) {
+        (Some(input), Some(mut pipe)) => pipe.write_all(input.as_bytes()),
+        _ => Ok(()),
+    };
     let output = child.wait_with_output().map_err(|e| (Error::command_failed(name, e), None))?;
+    // A signal death has no exit code: -1 in the record.
     let code = output.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    if output.status.success() {
-        Ok(Some((code, stdout, stderr)))
+    let failed = if !output.status.success() {
+        Some(Error::tool_failed(name, &format!("{} ({})", stderr.trim(), target_root::status_text(output.status))))
+    } else if let Err(e) = written {
+        Some(Error::tool_failed(name, &format!("it did not read its input: {e}")))
     } else {
-        let err = Error::tool_failed(name, &stderr)
-            .fix("fix the cause shown in the step's output, then run the plan again; finished steps are safe to repeat");
-        Err((err, Some((code, stdout, stderr))))
+        None
+    };
+    match failed {
+        None => Ok(Some((code, stdout, stderr))),
+        Some(err) => Err((
+            err.fix("fix the cause shown in the step's output, then run the plan again; finished steps are safe to repeat"),
+            Some((code, stdout, stderr)),
+        )),
     }
 }
 
@@ -248,17 +258,5 @@ fn write(root: &Root, path: &str, content: &[u8], mode: u32) -> Result<()> {
         return Err(Error::new(Code::UnsafeTargetPath, format!("'{}' is a directory", host.display()))
             .fix("remove the directory, then run the plan again"));
     }
-    let name = host.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = parent.join(format!(".{name}.recsetup"));
-    let written = (|| {
-        let mut file = fs::File::create(&tmp)?;
-        file.write_all(content)?;
-        file.set_permissions(fs::Permissions::from_mode(mode))?;
-        file.sync_all()?;
-        fs::rename(&tmp, &host)
-    })();
-    written.map_err(|e| {
-        let _ = fs::remove_file(&tmp);
-        Error::create_failed(&host, e)
-    })
+    target_root::write_durable(&host, content, Some(mode)).map_err(|e| Error::create_failed(&host, e))
 }

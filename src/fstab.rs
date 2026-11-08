@@ -63,7 +63,11 @@ impl fmt::Display for Entry {
 
 /// Entries for everything the target under `root_arg` needs in its fstab.
 pub fn generate(root_arg: &str, id_type: IdType) -> Result<Vec<Entry>> {
-    let root = crate::session::resolve_target(root_arg)?;
+    entries_for(&crate::session::resolve_target(root_arg)?, id_type)
+}
+
+/// [`generate`] for a resolved (canonical) root.
+fn entries_for(root: &Path, id_type: IdType) -> Result<Vec<Entry>> {
     let root = Root(root.to_string_lossy().into_owned());
 
     let mut mounts: Vec<Mount> = Vec::new();
@@ -158,7 +162,7 @@ pub enum Write {
 pub fn report(root_arg: &str, id_type: IdType, write: Write) -> Result<FstabResult> {
     let root = crate::session::resolve_target(root_arg)?;
     let root_str = root.to_string_lossy().into_owned();
-    let entries = generate(&root_str, id_type)?;
+    let entries = entries_for(&root, id_type)?;
     let fstab_path = root.join("etc/fstab");
     let existing = read_existing(&fstab_path)?;
     let existing: Vec<ExistingEntry> = existing
@@ -252,7 +256,9 @@ fn read_existing(path: &Path) -> Result<Vec<ExistingEntry>> {
             if line_text.is_empty() || line_text.starts_with('#') {
                 return None;
             }
-            let mut fields = line_text.split_whitespace().map(unescape_octal);
+            let mut fields = line_text
+                .split_whitespace()
+                .map(|field| String::from_utf8_lossy(&target_root::unescape_octal(field)).into_owned());
             Some(ExistingEntry {
                 line: i as u32 + 1,
                 spec: fields.next()?,
@@ -291,31 +297,13 @@ fn write_fstab(path: &Path, dropped: &BTreeSet<u32>, entries: &[Entry]) -> Resul
     for entry in entries {
         text.push_str(&entry.to_string());
     }
-    let tmp = path.with_extension("recfstab.tmp");
-    fs::write(&tmp, text).map_err(|e| Error::create_failed(path, e))?;
-    fs::rename(&tmp, path).map_err(|e| Error::create_failed(path, e))
-}
-
-/// fstab(5)'s octal escapes (`\040` for a space).
-fn unescape_octal(field: &str) -> String {
-    let mut out = String::with_capacity(field.len());
-    let mut rest = field;
-    while let Some(i) = rest.find('\\') {
-        out.push_str(&rest[..i]);
-        let code = rest.get(i + 1..i + 4).and_then(|oct| u8::from_str_radix(oct, 8).ok());
-        match code {
-            Some(byte) => {
-                out.push(byte as char);
-                rest = &rest[i + 4..];
-            }
-            None => {
-                out.push('\\');
-                rest = &rest[i + 1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    out
+    // An existing fstab keeps its mode; a new one gets the usual 0644.
+    let mode = match fs::metadata(path) {
+        Ok(meta) => std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o7777,
+        Err(e) if e.kind() == ErrorKind::NotFound => 0o644,
+        Err(e) => return Err(Error::path_unresolvable(&path.to_string_lossy(), e)),
+    };
+    target_root::write_durable(path, text.as_bytes(), Some(mode)).map_err(|e| Error::create_failed(path, e))
 }
 
 /// The canonical root, with path membership and re-rooting in one place.
@@ -360,17 +348,13 @@ impl Mount {
 }
 
 fn list_mounts() -> Result<Vec<Mount>> {
-    let rows = util_linux("findmnt", &["-rn", "-o", "TARGET,SOURCE,FSTYPE,OPTIONS"])?;
-    Ok(rows
-        .iter()
-        .filter_map(|fields| match fields.as_slice() {
-            [target, source, fstype, options] => Some(Mount {
-                target: target.clone(),
-                source: source.clone(),
-                fstype: fstype.clone(),
-                options: options.clone(),
-            }),
-            _ => None,
+    Ok(target_root::mount_table()?
+        .into_iter()
+        .map(|mount| Mount {
+            target: mount.mount_point.to_string_lossy().into_owned(),
+            source: mount.source,
+            fstype: mount.fstype,
+            options: mount.options,
         })
         .collect())
 }
@@ -456,14 +440,12 @@ fn escape(field: &str) -> String {
 
 fn identifier(device: &str, id_type: IdType) -> Result<String> {
     let tag = id_type.tag();
-    let output = Command::new("blkid")
-        .args(["-s", tag, "-o", "value", device])
-        .output()
-        .map_err(|e| Error::tool_missing("blkid", "util-linux", e))?;
-    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if !output.status.success() || value.is_empty() {
-        return Err(Error::identifier_unavailable(device, tag));
+    let value = match id_type {
+        IdType::Partuuid => target_root::partuuid(Path::new(device)),
+        _ => target_root::blkid_tag(Path::new(device), tag),
     }
+    .map_err(|e| Error::identifier_unavailable(device, tag).fix(e.to_string()))?
+    .ok_or_else(|| Error::identifier_unavailable(device, tag))?;
     Ok(format!("{tag}={value}"))
 }
 

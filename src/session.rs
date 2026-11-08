@@ -13,7 +13,7 @@
 //! failures.
 
 use crate::error::{Error, Result};
-use crate::guard::is_root;
+use target_root::is_root;
 use nix::mount::{mount, umount2, MntFlags, MsFlags};
 use std::fs;
 use std::os::unix::process::CommandExt;
@@ -22,6 +22,18 @@ use std::process::Command;
 
 const HANDLED_SIGNALS: [libc::c_int; 4] =
     [libc::SIGHUP, libc::SIGINT, libc::SIGTERM, libc::SIGQUIT];
+
+/// Where sessions make their private directories.
+const PRIVATE_DIR_BASE: &str = "/run";
+
+/// Host trees bound into a chroot. `/sys` is bound recursively, so efivarfs
+/// (when the host has it) comes along without a mount of its own.
+const CHROOT_BIND_DIRS: &[&str] = &["/proc", "/sys", "/dev", "/run"];
+
+/// The PATH of every command in a chroot, interactive or run by recsetup: the
+/// standard directories of the target, not the caller's (whose entries need not
+/// exist in the target, and may lack the sbin directories).
+pub const CHROOT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 pub struct Session {
     tool: &'static str,
@@ -50,12 +62,13 @@ impl Session {
         })
     }
 
-    /// A fresh private (0700) directory, removed again when the session ends.
+    /// A fresh private (0700) directory under `/run` (root's, not the
+    /// caller's `TMPDIR`), removed again when the session ends.
     pub fn private_dir(&mut self, prefix: &str) -> Result<PathBuf> {
         use std::ffi::{CString, OsString};
         use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
-        let base = std::env::temp_dir();
+        let base = PathBuf::from(PRIVATE_DIR_BASE);
         let template = base.join(format!("{prefix}.XXXXXX"));
         let template = CString::new(template.as_os_str().as_bytes())
             .map_err(|e| Error::create_failed(&base, e))?;
@@ -107,10 +120,11 @@ impl Session {
         match fs::symlink_metadata(target) {
             Ok(meta) if meta.is_file() => {}
             Ok(_) => return Err(Error::unsafe_mount_target(target, "it is not a regular file")),
-            Err(_) => {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 fs::File::create(target).map_err(|e| Error::create_failed(target, e))?;
                 self.created_files.push(target.to_path_buf());
             }
+            Err(e) => return Err(Error::path_unresolvable(&target.to_string_lossy(), e)),
         }
         mount(
             Some(source),
@@ -124,14 +138,19 @@ impl Session {
         Ok(())
     }
 
-    /// Mount a filesystem image read-only through a loop device. mount(8) sets
-    /// up the loop device (auto-cleared on unmount), which the raw syscall
-    /// cannot do.
+    /// Mount a filesystem image read-only: a file through a loop device
+    /// (mount(8) sets it up and clears it on unmount, which the raw syscall
+    /// cannot do), a block device (a partition holding the image) directly.
     pub fn mount_image(&mut self, image: &Path, fstype: &str, target: &Path) -> Result<()> {
+        use std::os::unix::fs::FileTypeExt;
         let src = image.display().to_string();
+        let block_device = fs::metadata(image)
+            .map_err(|e| Error::path_unresolvable(&src, e))?
+            .file_type()
+            .is_block_device();
         let status = self
             .command("mount")
-            .args(["-t", fstype, "-o", "ro,loop"])
+            .args(["-t", fstype, "-o", if block_device { "ro" } else { "ro,loop" }])
             .arg(image)
             .arg(target)
             .status()
@@ -142,6 +161,42 @@ impl Session {
         }
         self.mounts.push(target.to_path_buf());
         Ok(())
+    }
+
+    /// Prepare `root` for a chroot: the host's `/proc`, `/sys`, `/dev` and
+    /// `/run`, and the host's DNS for the session only (nothing is written
+    /// into the target). A target whose resolv.conf is a symlink keeps it: it
+    /// resolves inside the chroot, typically into the bound `/run`.
+    pub fn prepare_chroot(&mut self, root: &Path) -> Result<()> {
+        for dir in CHROOT_BIND_DIRS {
+            self.bind_dir(Path::new(dir), &root.join(dir.trim_start_matches('/')))?;
+        }
+        let host_resolv = match fs::canonicalize("/etc/resolv.conf") {
+            Ok(path) => path,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("{}: warning: the host has no /etc/resolv.conf, so the chroot gets no DNS", self.tool);
+                return Ok(());
+            }
+            Err(e) => return Err(Error::path_unresolvable("/etc/resolv.conf", e)),
+        };
+        let etc = root.join("etc");
+        let target = etc.join("resolv.conf");
+        let target_is_symlink = match fs::symlink_metadata(&target) {
+            Ok(meta) => meta.file_type().is_symlink(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(Error::path_unresolvable(&target.to_string_lossy(), e)),
+        };
+        if etc.is_dir() && !target_is_symlink {
+            self.bind_file(&host_resolv, &target)?;
+        }
+        Ok(())
+    }
+
+    /// `argv` run inside the prepared chroot `root`, with the target's PATH.
+    pub fn chroot_command(&self, root: &Path, argv: &[String]) -> Command {
+        let mut command = self.command("chroot");
+        command.arg(root).args(argv).env("PATH", CHROOT_PATH);
+        command
     }
 
     /// A command whose child process gets the default signal dispositions.
@@ -222,22 +277,19 @@ impl Drop for Session {
 /// mounted inside a session outlives it, a mount made by the chrooted command
 /// included.
 ///
-/// Without the privilege (EPERM: not root, or a container that forbids it)
-/// the session goes on in the host's namespace, as before: mounting needs the
-/// same privilege, so it fails later with its own error. Any other failure
-/// stops the session before it mounts anything; a namespace whose mounts are
-/// still shared with the host would make the binds leak into it.
+/// Not root (EPERM), the session goes on in the host's namespace and says
+/// so: mounting needs the same privilege, so it fails later with its own
+/// error. As root, and for any other failure, the session stops before it
+/// mounts anything: without a namespace of its own, its mounts would outlive
+/// a killed tool, and a namespace whose mounts are still shared with the host
+/// would make the binds leak into it.
 fn enter_private_mount_namespace(tool: &str) -> Result<()> {
     // SAFETY: unshare has no memory-safety preconditions; the tools are
     // single-threaded when a session begins.
     if unsafe { libc::unshare(libc::CLONE_NEWNS) } != 0 {
         let err = std::io::Error::last_os_error();
-        if err.raw_os_error() == Some(libc::EPERM) {
-            if is_root() {
-                eprintln!(
-                    "{tool}: warning: no private mount namespace ({err}); if {tool} is killed, its mounts stay behind"
-                );
-            }
+        if err.raw_os_error() == Some(libc::EPERM) && !is_root() {
+            eprintln!("{tool}: warning: not root, so no private mount namespace ({err})");
             return Ok(());
         }
         return Err(Error::private_namespace_failed(err));
@@ -260,7 +312,9 @@ fn refuse_symlink(target: &Path) -> Result<()> {
             target,
             "it is a symlink and could resolve outside the target",
         )),
-        _ => Ok(()),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::path_unresolvable(&target.to_string_lossy(), e)),
     }
 }
 

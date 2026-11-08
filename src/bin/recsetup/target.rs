@@ -104,26 +104,17 @@ impl Root {
         self.resolve(target_path).is_ok_and(|p| p.is_dir())
     }
 
-    /// The file's text, or `None` when it does not exist or cannot be read.
-    pub fn read(&self, target_path: &str) -> Option<String> {
-        fs::read_to_string(self.resolve(target_path).ok()?).ok()
+    /// The file's text; `None` only when it does not exist.
+    pub fn read(&self, target_path: &str) -> Result<Option<String>> {
+        Ok(target_root::read_optional(&self.resolve(target_path)?)?)
     }
 
-    /// The names in a directory of the target, sorted; empty when it is missing.
-    pub fn list(&self, target_path: &str) -> Vec<String> {
-        let Ok(dir) = self.resolve(target_path) else {
-            return Vec::new();
-        };
-        let mut names: Vec<String> = fs::read_dir(dir)
-            .map(|entries| {
-                entries
-                    .flatten()
-                    .map(|e| e.file_name().to_string_lossy().into_owned())
-                    .collect()
-            })
-            .unwrap_or_default();
-        names.sort();
-        names
+    /// The names in a directory of the target, sorted; empty only when it is missing.
+    pub fn list(&self, target_path: &str) -> Result<Vec<String>> {
+        Ok(target_root::dir_names(&self.resolve(target_path)?)?
+            .into_iter()
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect())
     }
 
     /// A program the target can run, looked up in its usual bin directories.
@@ -193,7 +184,7 @@ pub fn detect(root: &Root) -> Result<Target> {
             "extract a system built by the current builder (its /etc/os-release carries the REC_* fields), and point --root at its top directory",
         )
     };
-    let os_release = install_tools::target_system::os_release(root.path())
+    let os_release = target_root::os_release(root.path())?
         .ok_or_else(|| no_profile("no etc/os-release or usr/lib/os-release".to_string()))?;
     let profile = Profile::from_os_release(&os_release).map_err(|e| no_profile(e.to_string()))?;
     let os_id = os_release_value(&os_release, "ID")
@@ -208,7 +199,7 @@ pub fn detect(root: &Root) -> Result<Target> {
         tool,
         rule_file: format!("/{}", tool.admin_rule_file()),
         rule_present: root
-            .read(tool.admin_rule_file())
+            .read(tool.admin_rule_file())?
             .is_some_and(|text| text.lines().any(|line| line.trim() == rule)),
     };
 
@@ -225,11 +216,14 @@ pub fn detect(root: &Root) -> Result<Target> {
         None
     };
 
-    let default_shell = install_tools::target_system::root_shell(&root.read("etc/passwd").unwrap_or_default());
+    let default_shell = target_root::root_shell(&root.read("etc/passwd")?.unwrap_or_default());
 
-    let boot_is_mountpoint = match (fs::metadata(root.path()), root.resolve("boot").and_then(|b| fs::metadata(&b).map_err(|e| Error::path_unresolvable("boot", e)))) {
-        (Ok(top), Ok(boot)) => top.dev() != boot.dev(),
-        _ => false,
+    let top = fs::metadata(root.path()).map_err(|e| Error::path_unresolvable(&root.path().to_string_lossy(), e))?;
+    let boot = root.resolve("boot")?;
+    let boot_is_mountpoint = match fs::metadata(&boot) {
+        Ok(boot) => top.dev() != boot.dev(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(Error::path_unresolvable(&boot.to_string_lossy(), e)),
     };
 
     Ok(Target {
@@ -279,16 +273,16 @@ pub struct Choices {
     pub services: Vec<ServiceChoice>,
 }
 
-pub fn choices(root: &Root, target: &Target) -> Choices {
-    Choices {
+pub fn choices(root: &Root, target: &Target) -> Result<Choices> {
+    Ok(Choices {
         timezones: timezones(root),
-        locales: locales(root, target.profile.libc),
+        locales: locales(root, target.profile.libc)?,
         keymaps: keymaps(root, target.profile.init),
-        shells: shells(root, target),
-        groups: account_names(root, "etc/group"),
-        users: account_names(root, "etc/passwd"),
-        services: services(root, target.profile.init),
-    }
+        shells: shells(root, target)?,
+        groups: account_names(root, "etc/group")?,
+        users: account_names(root, "etc/passwd")?,
+        services: services(root, target.profile.init)?,
+    })
 }
 
 pub fn timezones(root: &Root) -> Vec<TimezoneChoice> {
@@ -358,26 +352,26 @@ fn is_locale_name(name: &str) -> bool {
 
 /// Every locale the target can use as it is: glibc's compiled locales, or
 /// musl's (musl compiles nothing; its locale files only translate messages).
-pub fn locales(root: &Root, libc: Libc) -> Vec<LocaleChoice> {
+pub fn locales(root: &Root, libc: Libc) -> Result<Vec<LocaleChoice>> {
     let mut found = BTreeSet::new();
     match libc {
         Libc::Musl => {
             found.insert("C.UTF-8".to_string());
-            for name in root.list("usr/share/i18n/locales/musl") {
+            for name in root.list("usr/share/i18n/locales/musl")? {
                 if is_locale_name(&name) {
                     found.insert(name);
                 }
             }
         }
         Libc::Glibc => {
-            for name in root.list("usr/lib/locale") {
+            for name in root.list("usr/lib/locale")? {
                 if root.is_file(&format!("usr/lib/locale/{name}/LC_CTYPE")) {
                     found.insert(normalize_locale(&name));
                 }
             }
         }
     }
-    found.into_iter().map(|name| LocaleChoice { name }).collect()
+    Ok(found.into_iter().map(|name| LocaleChoice { name }).collect())
 }
 
 /// Where the init system's keymap loader takes its keymaps from: systemd's
@@ -427,9 +421,9 @@ fn collect_keymaps(dir: &Path, out: &mut BTreeSet<String>) {
     }
 }
 
-pub fn shells(root: &Root, target: &Target) -> Vec<String> {
+pub fn shells(root: &Root, target: &Target) -> Result<Vec<String>> {
     let mut shells: BTreeSet<String> = root
-        .read("etc/shells")
+        .read("etc/shells")?
         .unwrap_or_default()
         .lines()
         .map(str::trim)
@@ -437,41 +431,35 @@ pub fn shells(root: &Root, target: &Target) -> Vec<String> {
         .map(str::to_string)
         .collect();
     shells.insert(target.default_shell.clone());
-    shells.into_iter().collect()
+    Ok(shells.into_iter().collect())
 }
 
-pub fn account_names(root: &Root, file: &str) -> Vec<String> {
-    root.read(file)
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| l.split(':').next())
-        .filter(|n| !n.is_empty() && !n.starts_with('#'))
-        .map(str::to_string)
-        .collect()
+pub fn account_names(root: &Root, file: &str) -> Result<Vec<String>> {
+    Ok(target_root::account_names(&root.read(file)?.unwrap_or_default()))
 }
 
 /// The services that can be started at boot, by their bare names (`sshd`, not
 /// `sshd.service`) on every init system. systemd offers the units it can
 /// enable (an `[Install]` section, no templates), OpenRC every init script.
-pub fn services(root: &Root, init: InitSystem) -> Vec<ServiceChoice> {
+pub fn services(root: &Root, init: InitSystem) -> Result<Vec<ServiceChoice>> {
     let mut services: BTreeMap<String, Vec<String>> = BTreeMap::new();
     match init {
         InitSystem::Systemd => {
             for dir in ["usr/lib/systemd/system", "etc/systemd/system"] {
-                for unit in root.list(dir) {
+                for unit in root.list(dir)? {
                     let Some(name) = unit.strip_suffix(".service") else { continue };
                     if name.ends_with('@') {
                         continue;
                     }
-                    let text = root.read(&format!("{dir}/{unit}")).unwrap_or_default();
+                    let text = root.read(&format!("{dir}/{unit}"))?.unwrap_or_default();
                     if text.lines().any(|l| l.trim() == "[Install]") {
                         services.entry(name.to_string()).or_default();
                     }
                 }
             }
-            for wants in root.list("etc/systemd/system") {
+            for wants in root.list("etc/systemd/system")? {
                 let Some(target) = wants.strip_suffix(".wants") else { continue };
-                for unit in root.list(&format!("etc/systemd/system/{wants}")) {
+                for unit in root.list(&format!("etc/systemd/system/{wants}"))? {
                     let name = unit.strip_suffix(".service").unwrap_or(&unit);
                     if let Some(enabled) = services.get_mut(name) {
                         enabled.push(target.to_string());
@@ -480,13 +468,13 @@ pub fn services(root: &Root, init: InitSystem) -> Vec<ServiceChoice> {
             }
         }
         InitSystem::Openrc => {
-            for name in root.list("etc/init.d") {
+            for name in root.list("etc/init.d")? {
                 if root.is_file(&format!("etc/init.d/{name}")) && !name.starts_with('.') && name != "functions.sh" {
                     services.entry(name).or_default();
                 }
             }
-            for level in root.list("etc/runlevels") {
-                for name in root.list(&format!("etc/runlevels/{level}")) {
+            for level in root.list("etc/runlevels")? {
+                for name in root.list(&format!("etc/runlevels/{level}"))? {
                     if let Some(enabled) = services.get_mut(&name) {
                         enabled.push(level.clone());
                     }
@@ -494,8 +482,8 @@ pub fn services(root: &Root, init: InitSystem) -> Vec<ServiceChoice> {
             }
         }
     }
-    services
+    Ok(services
         .into_iter()
         .map(|(name, enabled_in)| ServiceChoice { name, enabled_in })
-        .collect()
+        .collect())
 }

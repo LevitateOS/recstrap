@@ -55,8 +55,10 @@ mounting (as recchroot does): the mount is never visible to the host and
 disappears with the process, so even a killed recstrap (SIGKILL, a dropped SSH
 session) leaves no loop mount behind. A hangup (SIGHUP), like an interrupt,
 stops the copy and recstrap then unmounts and removes its directory itself.
-Without the privilege to create the namespace (not root) recstrap runs as
-before in the host's namespace.
+Not root, recstrap runs in the host's namespace and says so; as root, a
+namespace that cannot be created stops it before it mounts anything. The
+mount directory is made under `/run`, not `$TMPDIR`; an image file is mounted
+through a loop device, a partition holding the image directly.
 
 ## What recstrap Does NOT Do
 
@@ -136,8 +138,8 @@ Both read what the system is from the distro profile in its `/etc/os-release`
 privilege tool, desktop, kernel line), never by probing for programs; a target
 without them is refused (E029). recstrap's own check after extraction is that
 the extracted tree carries that profile (E006 otherwise).
-Each step that runs in the target goes through its own `recchroot`, so no mount
-outlives the step.
+Each step that runs in the target gets its own chroot session (the binds and
+DNS recchroot sets up, in recsetup's own process), so no mount outlives the step.
 
 For `--boot`, `recsetup plan` (and so `apply`) requires the installed system's
 root partition to be mounted exactly at `--root` (E011 otherwise) and checks the

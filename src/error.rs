@@ -197,6 +197,11 @@ impl Error {
         )
     }
 
+    /// An I/O failure of a target-side primitive; its message names the path.
+    pub fn io(source: std::io::Error) -> Self {
+        Self::new(Code::PathUnresolvable, source.to_string())
+    }
+
     pub fn path_unresolvable(path: &str, source: std::io::Error) -> Self {
         Self::new(
             Code::PathUnresolvable,
@@ -316,5 +321,11 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl From<std::io::Error> for Error {
+    fn from(source: std::io::Error) -> Self {
+        Self::io(source)
+    }
+}
 
 pub type Result<T> = std::result::Result<T, Error>;

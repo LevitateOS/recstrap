@@ -7,19 +7,14 @@
 //! printed.
 
 use recinit::live::ROOTFS_SEARCH_PATHS;
-use install_tools::guard::{host_system_filesystem_holding, is_protected_path, is_root};
+use install_tools::guard::host_system_filesystem_holding;
+use target_root::{is_protected_path, is_root};
 use install_tools::error::{Error, Result};
-use std::fs::File;
-use std::io::{ErrorKind, Read, Seek, SeekFrom};
+use std::io::ErrorKind;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-
-/// The rootfs image format recstrap extracts.
-const ROOTFS_EXTENSION: &str = "erofs";
-const EROFS_MAGIC: u32 = 0xe0f5_e1e2;
-const EROFS_MAGIC_OFFSET: u64 = 1024;
 
 /// A rootfs expands to roughly this much; checked up front so a full disk
 /// fails before extraction starts rather than half-way through. The exact
@@ -40,8 +35,8 @@ pub const FORCE_WAIVES: &[Waiver] = &[Waiver::NonMountpoint, Waiver::Nonempty];
 
 pub struct Inputs {
     pub target: PathBuf,
-    /// The canonical rootfs image, if one was found.
-    rootfs: Option<PathBuf>,
+    /// The canonical rootfs image, if one was found, or why looking failed.
+    rootfs: std::result::Result<Option<PathBuf>, (String, std::io::Error)>,
     /// Where the rootfs was looked for, for the not-found message.
     pub rootfs_tried: Vec<String>,
     pub waived: Vec<Waiver>,
@@ -53,9 +48,16 @@ impl Inputs {
             Some(path) => vec![path.to_string()],
             None => ROOTFS_SEARCH_PATHS.iter().map(|p| p.to_string()).collect(),
         };
+        // The first candidate that exists; one that cannot be looked at stops
+        // the search with its error.
         let rootfs = candidates
             .iter()
-            .find_map(|candidate| Path::new(candidate).canonicalize().ok());
+            .find_map(|candidate| match Path::new(candidate).canonicalize() {
+                Ok(path) => Some(Ok(Some(path))),
+                Err(e) if e.kind() == ErrorKind::NotFound => None,
+                Err(e) => Some(Err((candidate.clone(), e))),
+            })
+            .unwrap_or(Ok(None));
         Self {
             target,
             rootfs,
@@ -70,9 +72,11 @@ impl Inputs {
 
     fn rootfs(&self) -> Result<&Path> {
         let tried: Vec<&str> = self.rootfs_tried.iter().map(String::as_str).collect();
-        self.rootfs
-            .as_deref()
-            .ok_or_else(|| Error::rootfs_not_found(&tried))
+        match &self.rootfs {
+            Ok(Some(path)) => Ok(path),
+            Ok(None) => Err(Error::rootfs_not_found(&tried)),
+            Err((candidate, e)) => Err(Error::path_unresolvable(candidate, std::io::Error::new(e.kind(), e.to_string()))),
+        }
     }
 }
 
@@ -243,10 +247,9 @@ fn rootfs_found(inputs: &Inputs) -> Result<()> {
 fn rootfs_is_image(inputs: &Inputs) -> Result<()> {
     use std::os::unix::fs::FileTypeExt;
     let rootfs = inputs.rootfs()?;
-    let is_image = std::fs::metadata(rootfs)
-        .map(|m| m.is_file() || m.file_type().is_block_device())
-        .unwrap_or(false);
-    if !is_image {
+    let meta = std::fs::metadata(rootfs)
+        .map_err(|e| Error::path_unresolvable(&rootfs.to_string_lossy(), e))?;
+    if !meta.is_file() && !meta.file_type().is_block_device() {
         return Err(Error::rootfs_not_file(&rootfs.to_string_lossy()));
     }
     Ok(())
@@ -267,32 +270,14 @@ fn rootfs_outside_target(inputs: &Inputs) -> Result<()> {
 
 /// Protects against mounting a corrupt or wrong-format image: an image file
 /// must be named `.erofs`, and file or partition must be readable and carry
-/// the EROFS superblock magic.
+/// an EROFS superblock (the rule recab's stage applies too).
 fn rootfs_is_erofs(inputs: &Inputs) -> Result<()> {
     let rootfs = inputs.rootfs()?;
     let shown = rootfs.to_string_lossy();
-    if rootfs.is_file() && rootfs.extension().and_then(|e| e.to_str()) != Some(ROOTFS_EXTENSION) {
-        return Err(Error::invalid_rootfs_format(
-            &shown,
-            &format!("expected a .{ROOTFS_EXTENSION} image"),
-        ));
-    }
-    let read_magic = || -> std::io::Result<u32> {
-        let mut file = File::open(rootfs)?;
-        file.seek(SeekFrom::Start(EROFS_MAGIC_OFFSET))?;
-        let mut buf = [0u8; 4];
-        file.read_exact(&mut buf)?;
-        Ok(u32::from_le_bytes(buf))
-    };
-    match read_magic() {
-        Ok(EROFS_MAGIC) => Ok(()),
-        Ok(magic) => Err(Error::invalid_rootfs_format(
-            &shown,
-            &format!("not a valid EROFS image (magic: 0x{magic:08x}, expected: 0x{EROFS_MAGIC:08x})"),
-        )),
-        Err(e) if e.kind() == ErrorKind::PermissionDenied => {
-            Err(Error::rootfs_not_readable(&shown))
-        }
+    match target_root::erofs_image(rootfs) {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(why)) => Err(Error::invalid_rootfs_format(&shown, &why)),
+        Err(e) if e.kind() == ErrorKind::PermissionDenied => Err(Error::rootfs_not_readable(&shown)),
         Err(e) => Err(Error::invalid_rootfs_format(&shown, &e.to_string())),
     }
 }
@@ -302,17 +287,19 @@ fn rootfs_is_erofs(inputs: &Inputs) -> Result<()> {
 /// changes nothing; the mount itself loads the module).
 fn kernel_has_erofs(_: &Inputs) -> Result<()> {
     let built_in = std::fs::read_to_string("/proc/filesystems")
-        .map(|list| list.lines().any(|line| line.split_whitespace().last() == Some("erofs")))
-        .unwrap_or(false);
-    let loadable = || {
-        Command::new("modprobe")
-            .args(["-n", "-q", "erofs"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
-    };
-    if built_in || loadable() {
+        .map_err(|e| Error::path_unresolvable("/proc/filesystems", e))?
+        .lines()
+        .any(|line| line.split_whitespace().last() == Some("erofs"));
+    if built_in {
+        return Ok(());
+    }
+    let loadable = Command::new("modprobe")
+        .args(["-n", "-q", "erofs"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| Error::tool_missing("modprobe", "kmod", e))?;
+    if loadable.success() {
         Ok(())
     } else {
         Err(Error::erofs_not_supported())
@@ -323,7 +310,7 @@ fn kernel_has_erofs(_: &Inputs) -> Result<()> {
 /// system describes itself in its os-release, distro profile included, which
 /// recsetup and recab read from it.
 pub fn verify_extraction(target: &Path) -> Result<()> {
-    let os_release = install_tools::target_system::os_release(target).ok_or_else(|| {
+    let os_release = target_root::os_release(target)?.ok_or_else(|| {
         Error::extraction_verification_failed(format!(
             "'{}' has no etc/os-release or usr/lib/os-release",
             target.display()

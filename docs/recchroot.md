@@ -28,11 +28,15 @@ recchroot /mnt bootctl install
 
 1. Bind mounts `/proc`, `/sys`, `/dev`, `/run`
 2. Bind mounts `/sys/firmware/efi/efivars` (if UEFI)
-3. Bind-mounts the host `/etc/resolv.conf` over the target's for DNS
+3. Bind-mounts the host `/etc/resolv.conf` over the target's for DNS (a
+   target whose resolv.conf is a symlink keeps it; a bind that fails stops
+   recchroot)
 4. Runs `chroot <target> <command>` (by default root's login shell in the
    target's `/etc/passwd`) with the standard PATH
    `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, not the caller's
-5. Unmounts everything on exit
+5. Unmounts everything on exit; the command's exit status is recchroot's,
+   and a cleanup failure is reported beside it (it becomes the error only when
+   the command succeeded)
 
 All of this happens in a private mount namespace that recchroot enters before
 its first mount. The binds are never visible to the host, nothing propagates

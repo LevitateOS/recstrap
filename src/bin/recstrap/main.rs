@@ -127,7 +127,9 @@ fn run(args: Args) -> Result<()> {
             schema_version: STRAP_SCHEMA_VERSION,
             target: target_str.into_owned(),
             rootfs: rootfs_str.into_owned(),
-            rootfs_bytes: std::fs::metadata(rootfs).map(|m| m.len()).unwrap_or(0),
+            rootfs_bytes: target_root::erofs_image(rootfs)?
+                .map_err(|why| install_tools::error::Error::invalid_rootfs_format(&rootfs.to_string_lossy(), &why))?
+                .bytes,
             free_bytes: guards::free_bytes(target)?,
             checks,
         };

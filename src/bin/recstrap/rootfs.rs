@@ -53,18 +53,15 @@ pub fn extract_erofs(rootfs: &Path, target: &Path, events: bool) -> Result<(u64,
     let mut child = cp.spawn().map_err(|e| Error::command_failed("cp", e))?;
     let stderr = child.stderr.take().map(|mut pipe| {
         std::thread::spawn(move || {
-            let mut text = String::new();
-            let _ = pipe.read_to_string(&mut text);
-            text
+            let mut text = Vec::new();
+            pipe.read_to_end(&mut text).map(|_| String::from_utf8_lossy(&text).into_owned())
         })
     });
     let mut entries = 0u64;
     if let Some(stdout) = child.stdout.take() {
         let mut last = Instant::now();
         for line in BufReader::new(stdout).split(b'\n') {
-            if line.is_err() {
-                break;
-            }
+            line.map_err(|e| Error::extraction_failed(format!("reading cp's progress: {e}")))?;
             entries += 1;
             if last.elapsed() >= PROGRESS_EVERY {
                 last = Instant::now();
@@ -74,7 +71,13 @@ pub fn extract_erofs(rootfs: &Path, target: &Path, events: bool) -> Result<(u64,
         }
     }
     let cp_status = child.wait().map_err(|e| Error::command_failed("cp", e))?;
-    let cp_errors = stderr.and_then(|t| t.join().ok()).unwrap_or_default();
+    let cp_errors = match stderr {
+        None => String::new(),
+        Some(reader) => reader
+            .join()
+            .map_err(|_| Error::extraction_failed("the thread reading cp's errors panicked"))?
+            .map_err(|e| Error::extraction_failed(format!("reading cp's errors: {e}")))?,
+    };
     if !cp_status.success() {
         let exit = cp_status.code().map_or("a signal".to_string(), |c| c.to_string());
         let detail = cp_errors.lines().take(5).collect::<Vec<_>>().join("; ");

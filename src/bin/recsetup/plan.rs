@@ -6,11 +6,10 @@ use crate::request::{check_hostname, check_username, invalid, BootMode, SetupReq
 use crate::target::{self, BootloaderMethod, Root, Target};
 use distro_profile::InitSystem;
 use install_tools::error::{Code, Error, Result};
-use install_tools::guard::mount_table;
+use target_root::mount_table;
 use recinit::live::LIVE_MEDIA_DIR;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub const PLAN_SCHEMA_VERSION: u32 = 1;
 const SETUP_PROGRAM: &str = "/usr/libexec/recipe-system-setup";
@@ -266,7 +265,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         );
     }
     if let Some(locale) = &request.locale {
-        if !target::locales(&root, target.profile.libc).iter().any(|c| &c.name == locale) {
+        if !target::locales(&root, target.profile.libc)?.iter().any(|c| &c.name == locale) {
             return Err(unavailable(
                 format!("locale '{locale}' is not available in the target"),
                 inspect_hint("locales"),
@@ -312,8 +311,8 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         password_users.push("root".to_string());
     }
     if !request.users.is_empty() {
-        let groups = target::account_names(&root, "etc/group");
-        let existing_users = target::account_names(&root, "etc/passwd");
+        let groups = target::account_names(&root, "etc/group")?;
+        let existing_users = target::account_names(&root, "etc/passwd")?;
         let mut seen = Vec::new();
         for user in &request.users {
             check_username(&user.name)?;
@@ -418,11 +417,13 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
             None => None,
         };
         if let Some(initrd) = &initrd {
-            let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
-                (Ok(a), Ok(b)) => a == b,
-                _ => a == b,
+            // A path that does not exist is compared as it is written.
+            let canonical = |path: &Path| match path.canonicalize() {
+                Ok(path) => Ok(path),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(path.to_path_buf()),
+                Err(e) => Err(Error::path_unresolvable(&path.to_string_lossy(), e)),
             };
-            if same(initrd, &live_initramfs) {
+            if canonical(initrd)? == canonical(&live_initramfs)? {
                 return Err(invalid(
                     format!(
                         "'{}' is the live medium's initramfs, which looks for the live medium and ignores root=: the installed system would not boot from its disk",
@@ -621,7 +622,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                         mode: 0o644,
                     },
                 );
-                let existing = root.read("boot/loader/loader.conf");
+                let existing = root.read("boot/loader/loader.conf")?;
                 let mut loader = set_loader_key(existing.as_deref(), "default", &entry_name);
                 if !loader
                     .lines()
@@ -650,7 +651,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         );
     }
     if !request.services.is_empty() {
-        let available = target::services(&root, target.profile.init);
+        let available = target::services(&root, target.profile.init)?;
         for name in &request.services {
             if !available.iter().any(|s| &s.name == name) {
                 return Err(unavailable(
@@ -680,21 +681,13 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
 
 /// The partition's PARTUUID, which names the root in the boot entry.
 fn partuuid(device: &Path) -> Result<String> {
-    let device_text = device.display().to_string();
-    let out = Command::new("blkid")
-        .args(["-s", "PARTUUID", "-o", "value"])
-        .arg(device)
-        .output()
-        .map_err(|e| Error::command_failed("blkid", e))?;
-    let value = String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .to_ascii_lowercase();
-    if !out.status.success() || value.is_empty() {
-        return Err(Error::identifier_unavailable(&device_text, "PARTUUID").fix(
-            "pass the root partition of a GPT disk (recpart apply reports it), and run as root",
-        ));
-    }
-    Ok(value)
+    target_root::partuuid(device)
+        .map_err(|e| Error::new(Code::IdentifierUnavailable, e.to_string()))?
+        .ok_or_else(|| {
+            Error::identifier_unavailable(&device.display().to_string(), "PARTUUID").fix(
+                "pass the root partition of a GPT disk (recpart apply reports it), and run as root",
+            )
+        })
 }
 
 /// The filesystem mounted exactly at the root, which the boot entries must
@@ -723,9 +716,15 @@ impl RootMount {
             )
             .fix("mount the installed system's root partition at --root"));
         };
-        let source_dev = (mount.dev.0 == 0)
-            .then(|| block_device("mount source", Path::new(&mount.source)).ok())
-            .flatten();
+        // A source that is no block device (a btrfs mounted by UUID) names none.
+        let source_dev = match mount.dev.0 == 0 {
+            true => match target_root::block_rdev(Path::new(&mount.source)) {
+                Ok(rdev) => Some((libc::major(rdev), libc::minor(rdev))),
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput) => None,
+                Err(e) => return Err(Error::io(e)),
+            },
+            false => None,
+        };
         Ok(Self {
             root: root.to_path_buf(),
             dev: mount.dev,

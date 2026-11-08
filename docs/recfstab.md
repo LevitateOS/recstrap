@@ -83,7 +83,7 @@ Every failure prints an `E0NN` code; the number is also the exit status. The cod
 ## Requirements
 
 - Root privileges
-- util-linux (provides `findmnt`, `blkid`)
+- util-linux (provides `swapon`, `lsblk`, `blkid`); mounts are read from `/proc/self/mountinfo`
 - Filesystems must be mounted
 
 ## Building
@@ -96,7 +96,7 @@ cargo build --release
 
 MIT OR Apache-2.0
 
-CLI integration checks use the real mount table and require Linux with a block-backed root filesystem plus `findmnt`/`blkid`. A command error or empty successful output fails the mount checks.
+CLI integration checks use the real mount table and require Linux with a block-backed root filesystem plus `blkid`. A command error or empty successful output fails the mount checks.
 
 ```bash
 cargo test -p recfstab --test integration

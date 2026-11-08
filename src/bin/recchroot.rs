@@ -10,11 +10,10 @@
 //! This is NOT an installer. This enters chroot. That's it.
 
 use clap::Parser;
-use install_tools::error::{Error, Result};
+use install_tools::error::{Code, Error, Result};
 use install_tools::session::{resolve_target, Session};
-use install_tools::guard::is_root;
-use std::path::Path;
 use std::process::ExitCode;
+use target_root::{is_protected_path, is_root};
 
 #[derive(Parser)]
 #[command(name = "recchroot")]
@@ -29,12 +28,6 @@ struct Args {
     command: Vec<String>,
 }
 
-/// Host trees bound into the chroot. `/sys` is bound recursively, so efivarfs
-/// (when the host has it) comes along without a mount of its own.
-const BIND_DIRS: &[&str] = &["/proc", "/sys", "/dev", "/run"];
-
-use install_tools::guard::is_protected_path;
-
 fn main() -> ExitCode {
     match run() {
         Ok(code) => ExitCode::from(code),
@@ -43,18 +36,6 @@ fn main() -> ExitCode {
             ExitCode::from(e.code.exit_status())
         }
     }
-}
-
-/// The PATH of every command in the chroot, interactive or run by recsetup: the
-/// standard directories of the target, not the caller's (whose entries need not
-/// exist in the target, and may lack the sbin directories).
-const CHROOT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-
-/// The target's own login shell for root.
-fn target_root_shell(root: &Path) -> String {
-    install_tools::target_system::root_shell(
-        &std::fs::read_to_string(root.join("etc/passwd")).unwrap_or_default(),
-    )
 }
 
 fn run() -> Result<u8> {
@@ -69,50 +50,35 @@ fn run() -> Result<u8> {
         return Err(Error::not_root());
     }
 
-    let mut session = Session::begin("recchroot")?;
-    for dir in BIND_DIRS {
-        session.bind_dir(Path::new(dir), &root.join(dir.trim_start_matches('/')))?;
-    }
-
-    // Host DNS for the session only, without writing into the target. A
-    // symlinked target resolv.conf is left alone: it resolves inside the
-    // chroot (typically into the bound /run). DNS is a convenience, so a
-    // failure is a warning.
-    if let Ok(host_resolv) = std::fs::canonicalize("/etc/resolv.conf") {
-        let etc = root.join("etc");
-        let target = etc.join("resolv.conf");
-        let target_is_symlink = std::fs::symlink_metadata(&target)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false);
-        if etc.is_dir() && !target_is_symlink {
-            if let Err(e) = session.bind_file(&host_resolv, &target) {
-                eprintln!("recchroot: warning: DNS not configured: {e}");
-            }
-        }
-    }
-
-    let shell = target_root_shell(&root);
-    let (cmd, cmd_args) = match args.command.split_first() {
-        Some((cmd, rest)) => (cmd.as_str(), rest),
-        None => (shell.as_str(), &[][..]),
+    // The target's own login shell for root.
+    let passwd = target_root::read_optional(&root.join("etc/passwd"))?.unwrap_or_default();
+    let command = match args.command.is_empty() {
+        true => vec![target_root::root_shell(&passwd)],
+        false => args.command,
     };
-    let status = session
-        .command("chroot")
-        .arg(&root)
-        .arg(cmd)
-        .args(cmd_args)
-        .env("PATH", CHROOT_PATH)
-        .status();
-    session.close()?;
-    let status = status.map_err(|e| Error::command_failed("chroot", e))?;
 
-    // Pass the command's own status through; a signal death reports 128+N,
-    // as shells do.
+    let mut session = Session::begin("recchroot")?;
+    session.prepare_chroot(&root)?;
+    let status = session.chroot_command(&root, &command).status();
+    // The command's status is the answer; a cleanup failure is reported
+    // beside it, and replaces it only when the command succeeded.
+    let closed = session.close();
+    let status = status.map_err(|e| Error::command_failed("chroot", e))?;
     use std::os::unix::process::ExitStatusExt;
+    // A signal death reports 128+N, as shells do.
     let code = match (status.code(), status.signal()) {
         (Some(code), _) => code,
         (None, Some(signal)) => 128 + signal,
-        (None, None) => 1,
+        (None, None) => return Err(Error::new(Code::CommandFailed, format!("chroot ended without a status ({status})"))),
     };
-    Ok(u8::try_from(code).unwrap_or(1))
+    let code = u8::try_from(code)
+        .map_err(|_| Error::new(Code::CommandFailed, format!("chroot ended with status {code}, which is no exit status")))?;
+    match closed {
+        Err(e) if code == 0 => Err(e),
+        Err(e) => {
+            eprintln!("recchroot: {e}");
+            Ok(code)
+        }
+        Ok(()) => Ok(code),
+    }
 }
