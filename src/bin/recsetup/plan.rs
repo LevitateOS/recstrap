@@ -4,7 +4,6 @@
 
 use crate::request::{check_hostname, check_username, invalid, SetupRequest};
 use crate::target::{self, Root, Target};
-use distro_profile::InitSystem;
 use install_tools::error::{Code, Error, Result};
 use target_root::mount_table;
 use recinit::live::{
@@ -329,8 +328,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         let initrd = match &boot.initrd {
             Some(path) if path.as_os_str().is_empty() => None,
             Some(path) => Some(path.clone()),
-            None if target.profile.init == InitSystem::Systemd => Some(live(INITRAMFS_INSTALLED_ISO_PATH)),
-            None => None,
+            None => Some(live(INITRAMFS_INSTALLED_ISO_PATH)),
         };
         if let Some(initrd) = &initrd {
             // A path that does not exist is compared as it is written.
