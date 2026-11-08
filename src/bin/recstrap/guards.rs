@@ -319,19 +319,18 @@ fn kernel_has_erofs(_: &Inputs) -> Result<()> {
     }
 }
 
-/// Directories every extracted system must have; a missing one means the image
-/// was corrupt or incomplete.
-const ESSENTIAL_DIRS: &[&str] = &["bin", "etc", "lib", "sbin", "usr", "var"];
-
-/// Protects against reporting success for an incomplete system.
+/// Protects against reporting success for an incomplete system: an extracted
+/// system describes itself in its os-release, distro profile included, which
+/// recsetup and recab read from it.
 pub fn verify_extraction(target: &Path) -> Result<()> {
-    let missing: Vec<&str> = ESSENTIAL_DIRS
-        .iter()
-        .filter(|dir| !target.join(dir).is_dir())
-        .copied()
-        .collect();
-    if !missing.is_empty() {
-        return Err(Error::extraction_verification_failed(&missing));
-    }
+    let os_release = install_tools::target_system::os_release(target).ok_or_else(|| {
+        Error::extraction_verification_failed(format!(
+            "'{}' has no etc/os-release or usr/lib/os-release",
+            target.display()
+        ))
+    })?;
+    distro_profile::Profile::from_os_release(&os_release).map_err(|e| {
+        Error::extraction_verification_failed(format!("'{}': {e}", target.display()))
+    })?;
     Ok(())
 }

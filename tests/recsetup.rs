@@ -6,16 +6,19 @@
 use std::path::Path;
 use std::process::Command;
 
-/// A target recsetup can detect: systemd with bootctl, and a /boot directory.
+/// A target recsetup can read: a systemd profile, bootctl, and a /boot directory.
 /// Returns the target and a kernel file outside it.
 fn fake_target() -> (tempfile::TempDir, tempfile::TempDir) {
     let root = tempfile::tempdir().expect("create target");
-    for dir in ["usr/lib/systemd", "usr/bin", "etc", "boot"] {
+    for dir in ["usr/bin", "etc", "boot"] {
         std::fs::create_dir_all(root.path().join(dir)).unwrap();
     }
-    std::fs::write(root.path().join("usr/lib/systemd/systemd"), b"").unwrap();
     std::fs::write(root.path().join("usr/bin/bootctl"), b"").unwrap();
-    std::fs::write(root.path().join("etc/os-release"), b"ID=levitateos\nNAME=LevitateOS\n").unwrap();
+    std::fs::write(
+        root.path().join("etc/os-release"),
+        b"ID=levitateos\nNAME=LevitateOS\nREC_PACKAGES=rpm\nREC_INIT=systemd\nREC_LIBC=glibc\nREC_PRIVILEGE=sudo\nREC_DESKTOP=plasma\nREC_KERNEL_LINE=lts\n",
+    )
+    .unwrap();
     let media = tempfile::tempdir().expect("create kernel dir");
     std::fs::write(media.path().join("vmlinuz"), b"kernel").unwrap();
     (root, media)

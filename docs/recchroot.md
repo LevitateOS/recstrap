@@ -29,7 +29,9 @@ recchroot /mnt bootctl install
 1. Bind mounts `/proc`, `/sys`, `/dev`, `/run`
 2. Bind mounts `/sys/firmware/efi/efivars` (if UEFI)
 3. Bind-mounts the host `/etc/resolv.conf` over the target's for DNS
-4. Runs `chroot <target> <command>`
+4. Runs `chroot <target> <command>` (by default root's login shell in the
+   target's `/etc/passwd`) with the standard PATH
+   `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, not the caller's
 5. Unmounts everything on exit
 
 All of this happens in a private mount namespace that recchroot enters before

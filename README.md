@@ -131,6 +131,11 @@ and test helpers are a separate overlay and are never deployed by recstrap.
 
 `recsetup` validates user choices and invokes that target-side setup program for
 timezone, locale, keymap, hostname, accounts, machine identity and services.
+Both read what the system is from the distro profile in its `/etc/os-release`
+(the `REC_*` fields the builder writes: package backend, init system, libc,
+privilege tool, desktop, kernel line), never by probing for programs; a target
+without them is refused (E029). recstrap's own check after extraction is that
+the extracted tree carries that profile (E006 otherwise).
 Each step that runs in the target goes through its own `recchroot`, so no mount
 outlives the step.
 

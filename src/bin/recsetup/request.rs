@@ -33,7 +33,7 @@ pub struct SetupRequest {
     /// Give the system its machine id.
     #[serde(default)]
     pub machine_id: bool,
-    /// Services to start at boot (`systemctl enable` / `rc-update add`).
+    /// Services to start at boot, by bare name as `inspect` lists them (`sshd`).
     #[serde(default)]
     pub services: Vec<String>,
 }
@@ -49,10 +49,10 @@ pub struct UserRequest {
     /// Extra groups, on top of the admin group when `admin` is set.
     #[serde(default)]
     pub groups: Vec<String>,
-    /// Login shell; the target's bash, or sh without it, when unset.
+    /// Login shell; root's login shell in the target when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
-    /// Member of the admin group (wheel), with the target's sudo or doas.
+    /// Member of the admin group (wheel), with the privilege tool of the target's profile.
     #[serde(default = "yes")]
     pub admin: bool,
     /// Set the user's password (read from stdin at apply).
@@ -148,7 +148,7 @@ pub struct RequestFlags {
     /// Give the system its machine id
     #[arg(long)]
     pub machine_id: bool,
-    /// Service to start at boot (repeatable)
+    /// Service to start at boot, by bare name (repeatable)
     #[arg(long = "service", value_name = "NAME")]
     pub services: Vec<String>,
 }

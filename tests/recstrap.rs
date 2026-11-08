@@ -307,6 +307,11 @@ fn json_progress_on_a_mounted_layout() {
     for sub in ["bin", "etc", "lib", "sbin", "usr/share", "var"] {
         std::fs::create_dir_all(tree.join(sub)).unwrap();
     }
+    std::fs::write(
+        tree.join("etc/os-release"),
+        "ID=test\nREC_PACKAGES=rpm\nREC_INIT=systemd\nREC_LIBC=glibc\nREC_PRIVILEGE=sudo\nREC_DESKTOP=plasma\nREC_KERNEL_LINE=lts\n",
+    )
+    .unwrap();
     for i in 0..300 {
         std::fs::write(tree.join(format!("usr/share/f{i}")), vec![b'x'; 4096]).unwrap();
     }

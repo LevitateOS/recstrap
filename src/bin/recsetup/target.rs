@@ -1,9 +1,11 @@
-//! What the target root is and what it offers: its init system, libc,
-//! account and admin tools, and the time zones, locales, keymaps, shells,
-//! groups and services there are to choose from. Everything is read from
-//! files under the root, so `/mnt` and a scratch directory are inspected the
-//! same way, and nothing here changes the target.
+//! What the target root is and what it offers: its distro profile (read from
+//! its os-release, never guessed from the files it ships), its admin setup,
+//! and the time zones, locales, keymaps, shells, groups and services there are
+//! to choose from. Everything is read from files under the root, so `/mnt` and
+//! a scratch directory are inspected the same way, and nothing here changes
+//! the target.
 
+use distro_profile::{os_release_value, InitSystem, Libc, PrivilegeTool, Profile, ADMIN_GROUP};
 use install_tools::error::{Code, Error, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -94,10 +96,6 @@ impl Root {
         Ok(out)
     }
 
-    pub fn exists(&self, target_path: &str) -> bool {
-        self.resolve(target_path).is_ok_and(|p| p.exists())
-    }
-
     pub fn is_file(&self, target_path: &str) -> bool {
         self.resolve(target_path).is_ok_and(|p| p.is_file())
     }
@@ -146,57 +144,6 @@ fn components(path: &Path) -> VecDeque<OsString> {
         .collect()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum InitSystem {
-    Systemd,
-    Openrc,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Libc {
-    Glibc,
-    Musl,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Variant {
-    Levitate,
-    Acorn,
-    Other,
-}
-
-/// How a locale is made available.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LocaleMethod {
-    /// glibc with `locale-gen` and `/etc/locale.gen`: enable the line, run it.
-    LocaleGen,
-    /// glibc with `localedef` and the locale sources: compile the one locale.
-    Localedef,
-    /// glibc with neither: only the locales already compiled can be chosen.
-    Precompiled,
-    /// musl compiles nothing: setting `LANG` is all there is.
-    Musl,
-}
-
-/// What creates accounts: shadow's `useradd`, or busybox's `adduser`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountTool {
-    Shadow,
-    Busybox,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AdminTool {
-    Sudo,
-    Doas,
-}
-
 /// How systemd-boot gets onto the ESP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -211,9 +158,10 @@ pub enum BootloaderMethod {
 #[derive(Debug, Clone, Serialize)]
 pub struct Admin {
     pub group: String,
-    /// `None` when the target ships neither sudo nor doas.
-    pub tool: Option<AdminTool>,
-    /// The tool already lets the group in, so nothing needs writing.
+    pub tool: PrivilegeTool,
+    /// The file the system recipe writes the admin rule into.
+    pub rule_file: String,
+    /// The rule is there, so nothing needs writing.
     pub rule_present: bool,
 }
 
@@ -223,96 +171,45 @@ pub struct Target {
     pub root: String,
     pub os_id: String,
     pub os_name: String,
-    pub variant: Variant,
-    pub init: InitSystem,
-    pub libc: Libc,
-    pub locale_method: LocaleMethod,
-    pub account_tool: Option<AccountTool>,
+    /// The distro profile from the target's os-release.
+    pub profile: Profile,
     pub admin: Admin,
     pub bootloader: Option<BootloaderMethod>,
     /// systemd-boot's EFI binary in the target, when it has one.
     pub systemd_boot_efi: Option<String>,
     /// The time zone database is installed (without it only UTC exists).
     pub has_zoneinfo: bool,
+    /// The shell of new users: root's login shell in the target.
     pub default_shell: String,
     /// The ESP is mounted at the target's `/boot`.
     pub boot_is_mountpoint: bool,
 }
 
-/// The admin group `recsetup` adds administrators to.
-pub const ADMIN_GROUP: &str = "wheel";
-
 const ZONEINFO: &str = "usr/share/zoneinfo";
 
 pub fn detect(root: &Root) -> Result<Target> {
-    let init = if ["sbin/openrc-run", "usr/sbin/openrc-run", "usr/bin/openrc-run"]
-        .iter()
-        .any(|p| root.exists(p))
-    {
-        InitSystem::Openrc
-    } else if root.exists("usr/lib/systemd/systemd") {
-        InitSystem::Systemd
-    } else {
-        return Err(Error::new(
-            Code::UnknownInitSystem,
-            format!(
-                "cannot tell the init system of '{}': no openrc-run and no usr/lib/systemd/systemd",
-                root.path().display()
-            ),
+    let no_profile = |detail: String| {
+        Error::new(Code::NoProfile, format!("'{}': {detail}", root.path().display())).fix(
+            "extract a system built by the current builder (its /etc/os-release carries the REC_* fields), and point --root at its top directory",
         )
-        .fix("extract the system first (recstrap), and point --root at its top directory"));
     };
+    let os_release = install_tools::target_system::os_release(root.path())
+        .ok_or_else(|| no_profile("no etc/os-release or usr/lib/os-release".to_string()))?;
+    let profile = Profile::from_os_release(&os_release).map_err(|e| no_profile(e.to_string()))?;
+    let os_id = os_release_value(&os_release, "ID")
+        .unwrap_or_else(|| "linux".to_string())
+        .to_ascii_lowercase();
+    let os_name = os_release_value(&os_release, "NAME").unwrap_or_else(|| os_id.clone());
 
-    let libc = if root.list("lib").iter().chain(root.list("usr/lib").iter()).any(|n| n.starts_with("ld-musl-")) {
-        Libc::Musl
-    } else {
-        Libc::Glibc
-    };
-
-    let os_release = root.read("etc/os-release").or_else(|| root.read("usr/lib/os-release")).unwrap_or_default();
-    let field = |key: &str| {
-        os_release
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix(key))
-            .map(|value| value.trim().trim_matches('"').trim().to_string())
-            .find(|value| !value.is_empty())
-    };
-    let os_id = field("ID=").unwrap_or_else(|| "linux".to_string()).to_ascii_lowercase();
-    let os_name = field("NAME=").unwrap_or_else(|| os_id.clone());
-    let variant = match os_id.as_str() {
-        "levitateos" | "levitate" => Variant::Levitate,
-        "acornos" | "acorn" => Variant::Acorn,
-        _ => Variant::Other,
-    };
-
-    let locale_method = match libc {
-        Libc::Musl => LocaleMethod::Musl,
-        Libc::Glibc if root.has_program("locale-gen") && root.is_file("etc/locale.gen") => LocaleMethod::LocaleGen,
-        Libc::Glibc if root.has_program("localedef") && !root.list("usr/share/i18n/locales").is_empty() => {
-            LocaleMethod::Localedef
-        }
-        Libc::Glibc => LocaleMethod::Precompiled,
-    };
-
-    let account_tool = if root.has_program("useradd") {
-        Some(AccountTool::Shadow)
-    } else if root.has_program("adduser") {
-        Some(AccountTool::Busybox)
-    } else {
-        None
-    };
-
-    let admin_tool = if root.has_program("sudo") {
-        Some(AdminTool::Sudo)
-    } else if root.has_program("doas") {
-        Some(AdminTool::Doas)
-    } else {
-        None
-    };
+    let tool = profile.privilege;
+    let rule = tool.admin_rule();
     let admin = Admin {
         group: ADMIN_GROUP.to_string(),
-        tool: admin_tool,
-        rule_present: admin_tool.is_some_and(|tool| admin_rule_present(root, tool)),
+        tool,
+        rule_file: format!("/{}", tool.admin_rule_file()),
+        rule_present: root
+            .read(tool.admin_rule_file())
+            .is_some_and(|text| text.lines().any(|line| line.trim() == rule)),
     };
 
     let efi_name = match std::env::consts::ARCH {
@@ -320,7 +217,7 @@ pub fn detect(root: &Root) -> Result<Target> {
         _ => "systemd-bootx64.efi",
     };
     let systemd_boot_efi = Some(format!("usr/lib/systemd/boot/efi/{efi_name}")).filter(|p| root.is_file(p));
-    let bootloader = if init == InitSystem::Systemd && root.has_program("bootctl") {
+    let bootloader = if profile.init == InitSystem::Systemd && root.has_program("bootctl") {
         Some(BootloaderMethod::Bootctl)
     } else if systemd_boot_efi.is_some() {
         Some(BootloaderMethod::Copy)
@@ -328,7 +225,7 @@ pub fn detect(root: &Root) -> Result<Target> {
         None
     };
 
-    let default_shell = if root.is_file("bin/bash") { "/bin/bash" } else { "/bin/sh" }.to_string();
+    let default_shell = install_tools::target_system::root_shell(&root.read("etc/passwd").unwrap_or_default());
 
     let boot_is_mountpoint = match (fs::metadata(root.path()), root.resolve("boot").and_then(|b| fs::metadata(&b).map_err(|e| Error::path_unresolvable("boot", e)))) {
         (Ok(top), Ok(boot)) => top.dev() != boot.dev(),
@@ -339,11 +236,7 @@ pub fn detect(root: &Root) -> Result<Target> {
         root: root.path().display().to_string(),
         os_id,
         os_name,
-        variant,
-        init,
-        libc,
-        locale_method,
-        account_tool,
+        profile,
         admin,
         bootloader,
         systemd_boot_efi: systemd_boot_efi.map(|p| format!("/{p}")),
@@ -351,24 +244,6 @@ pub fn detect(root: &Root) -> Result<Target> {
         default_shell,
         boot_is_mountpoint,
     })
-}
-
-fn admin_rule_present(root: &Root, tool: AdminTool) -> bool {
-    let (files, matches): (Vec<String>, fn(&str) -> bool) = match tool {
-        AdminTool::Sudo => (
-            std::iter::once("etc/sudoers".to_string())
-                .chain(root.list("etc/sudoers.d").into_iter().map(|n| format!("etc/sudoers.d/{n}")))
-                .collect(),
-            |line| line.starts_with("%wheel") && line.contains("ALL"),
-        ),
-        AdminTool::Doas => (
-            std::iter::once("etc/doas.conf".to_string())
-                .chain(root.list("etc/doas.d").into_iter().map(|n| format!("etc/doas.d/{n}")))
-                .collect(),
-            |line| line.starts_with("permit") && line.split_whitespace().any(|w| w == ":wheel"),
-        ),
-    };
-    files.iter().filter_map(|f| root.read(f)).any(|text| text.lines().map(str::trim).any(matches))
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -382,18 +257,6 @@ pub struct TimezoneChoice {
 pub struct LocaleChoice {
     /// The `LANG` value, such as `en_US.UTF-8`.
     pub name: String,
-    /// Usable as it is; `false` means apply compiles it first.
-    pub compiled: bool,
-}
-
-/// How to compile a locale that is not compiled yet.
-#[derive(Debug, Clone)]
-pub struct LocaleSource {
-    /// `locale.gen`/`SUPPORTED` form: `en_US.UTF-8 UTF-8`.
-    pub line: String,
-    pub charset: String,
-    /// The source name in /usr/share/i18n/locales (`en_US`, `de_DE@euro`).
-    pub input: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -407,6 +270,7 @@ pub struct ServiceChoice {
 #[derive(Debug, Clone, Serialize)]
 pub struct Choices {
     pub timezones: Vec<TimezoneChoice>,
+    /// Usable as they are: recsetup compiles no locales.
     pub locales: Vec<LocaleChoice>,
     pub keymaps: Vec<String>,
     pub shells: Vec<String>,
@@ -418,12 +282,12 @@ pub struct Choices {
 pub fn choices(root: &Root, target: &Target) -> Choices {
     Choices {
         timezones: timezones(root),
-        locales: locales(root, target).into_iter().map(|(choice, _)| choice).collect(),
-        keymaps: keymaps(root, target.init),
+        locales: locales(root, target.profile.libc),
+        keymaps: keymaps(root, target.profile.init),
         shells: shells(root, target),
         groups: account_names(root, "etc/group"),
         users: account_names(root, "etc/passwd"),
-        services: services(root, target.init),
+        services: services(root, target.profile.init),
     }
 }
 
@@ -492,79 +356,45 @@ fn is_locale_name(name: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-@".contains(c))
 }
 
-/// Every locale the target can use, with how to compile the ones it has not
-/// compiled yet.
-pub fn locales(root: &Root, target: &Target) -> Vec<(LocaleChoice, Option<LocaleSource>)> {
-    let mut found: BTreeMap<String, (bool, Option<LocaleSource>)> = BTreeMap::new();
-    match target.locale_method {
-        LocaleMethod::Musl => {
-            found.insert("C.UTF-8".to_string(), (true, None));
+/// Every locale the target can use as it is: glibc's compiled locales, or
+/// musl's (musl compiles nothing; its locale files only translate messages).
+pub fn locales(root: &Root, libc: Libc) -> Vec<LocaleChoice> {
+    let mut found = BTreeSet::new();
+    match libc {
+        Libc::Musl => {
+            found.insert("C.UTF-8".to_string());
             for name in root.list("usr/share/i18n/locales/musl") {
                 if is_locale_name(&name) {
-                    found.insert(name, (true, None));
+                    found.insert(name);
                 }
             }
         }
-        method => {
+        Libc::Glibc => {
             for name in root.list("usr/lib/locale") {
                 if root.is_file(&format!("usr/lib/locale/{name}/LC_CTYPE")) {
-                    found.insert(normalize_locale(&name), (true, None));
+                    found.insert(normalize_locale(&name));
                 }
-            }
-            let source_lines = match method {
-                LocaleMethod::LocaleGen => root.read("etc/locale.gen").unwrap_or_default(),
-                // Fedora ships no SUPPORTED list: offer every source in UTF-8.
-                LocaleMethod::Localedef => root.read("usr/share/i18n/SUPPORTED").unwrap_or_else(|| {
-                    root.list("usr/share/i18n/locales")
-                        .into_iter()
-                        .filter(|n| n.contains('_') && !n.starts_with("translit_") && !n.starts_with("iso"))
-                        .map(|n| match n.split_once('@') {
-                            Some((base, modifier)) => format!("{base}.UTF-8@{modifier} UTF-8\n"),
-                            None => format!("{n}.UTF-8 UTF-8\n"),
-                        })
-                        .collect()
-                }),
-                _ => String::new(),
-            };
-            for line in source_lines.lines() {
-                let line = line.trim().trim_start_matches('#').trim();
-                let mut words = line.split_whitespace();
-                let (Some(name), Some(charset), None) = (words.next(), words.next(), words.next()) else {
-                    continue;
-                };
-                if !is_locale_name(name) || !charset.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-                    continue;
-                }
-                let modifier = name.split_once('@').map(|(_, m)| format!("@{m}")).unwrap_or_default();
-                let input = format!("{}{modifier}", name.split(['.', '@']).next().unwrap_or(name));
-                if method == LocaleMethod::Localedef {
-                    // localedef unpacks a gzipped charmap with the target's gzip.
-                    let charmap = format!("usr/share/i18n/charmaps/{charset}");
-                    let charmap_ok = root.is_file(&charmap)
-                        || (root.is_file(&format!("{charmap}.gz")) && root.has_program("gzip"));
-                    if !charmap_ok || !root.is_file(&format!("usr/share/i18n/locales/{input}")) {
-                        continue;
-                    }
-                }
-                let key = normalize_locale(name);
-                found.entry(key).or_insert((
-                    false,
-                    Some(LocaleSource { line: format!("{name} {charset}"), charset: charset.to_string(), input }),
-                ));
             }
         }
     }
-    found
-        .into_iter()
-        .map(|(name, (compiled, source))| (LocaleChoice { name, compiled }, source))
-        .collect()
+    found.into_iter().map(|name| LocaleChoice { name }).collect()
 }
 
-/// Console keymap directories, in the order the init system's loader looks.
+/// Where the init system's keymap loader takes its keymaps from: systemd's
+/// vconsole setup loads kbd's, busybox's `loadkmap` service (OpenRC) the binary
+/// ones of kbd-bkeymaps. The system setup program configures the same loader.
 fn keymap_dirs(init: InitSystem) -> &'static [&'static str] {
     match init {
         InitSystem::Systemd => &["usr/lib/kbd/keymaps", "usr/share/kbd/keymaps"],
-        InitSystem::Openrc => &["usr/share/bkeymaps", "usr/share/keymaps", "usr/share/kbd/keymaps", "usr/lib/kbd/keymaps"],
+        InitSystem::Openrc => &["usr/share/bkeymaps"],
+    }
+}
+
+/// The program that loads the configured keymap at boot, relative to the root.
+pub fn keymap_loader(init: InitSystem) -> &'static str {
+    match init {
+        InitSystem::Systemd => "usr/lib/systemd/systemd-vconsole-setup",
+        InitSystem::Openrc => "etc/init.d/loadkmap",
     }
 }
 
@@ -620,25 +450,30 @@ pub fn account_names(root: &Root, file: &str) -> Vec<String> {
         .collect()
 }
 
+/// The services that can be started at boot, by their bare names (`sshd`, not
+/// `sshd.service`) on every init system. systemd offers the units it can
+/// enable (an `[Install]` section, no templates), OpenRC every init script.
 pub fn services(root: &Root, init: InitSystem) -> Vec<ServiceChoice> {
     let mut services: BTreeMap<String, Vec<String>> = BTreeMap::new();
     match init {
         InitSystem::Systemd => {
             for dir in ["usr/lib/systemd/system", "etc/systemd/system"] {
-                for name in root.list(dir) {
-                    if !name.ends_with(".service") || name.contains("@.") {
+                for unit in root.list(dir) {
+                    let Some(name) = unit.strip_suffix(".service") else { continue };
+                    if name.ends_with('@') {
                         continue;
                     }
-                    let unit = root.read(&format!("{dir}/{name}")).unwrap_or_default();
-                    if unit.lines().any(|l| l.trim() == "[Install]") {
-                        services.entry(name).or_default();
+                    let text = root.read(&format!("{dir}/{unit}")).unwrap_or_default();
+                    if text.lines().any(|l| l.trim() == "[Install]") {
+                        services.entry(name.to_string()).or_default();
                     }
                 }
             }
             for wants in root.list("etc/systemd/system") {
                 let Some(target) = wants.strip_suffix(".wants") else { continue };
-                for name in root.list(&format!("etc/systemd/system/{wants}")) {
-                    if let Some(enabled) = services.get_mut(&name) {
+                for unit in root.list(&format!("etc/systemd/system/{wants}")) {
+                    let name = unit.strip_suffix(".service").unwrap_or(&unit);
+                    if let Some(enabled) = services.get_mut(name) {
                         enabled.push(target.to_string());
                     }
                 }

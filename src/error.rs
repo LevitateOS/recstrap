@@ -38,7 +38,8 @@ pub enum Code {
     OnHostRootFilesystem = 26,
     IdentifierUnavailable = 27,
     RemoveFailed = 28,
-    UnknownInitSystem = 29,
+    /// The target's os-release carries no distro profile (`REC_*` fields).
+    NoProfile = 29,
     InvalidRequest = 30,
     ChoiceUnavailable = 31,
     PasswordInput = 32,
@@ -114,13 +115,10 @@ impl Error {
         Self::new(Code::ExtractionFailed, format!("extraction failed: {detail}"))
     }
 
-    pub fn extraction_verification_failed(missing: &[&str]) -> Self {
+    pub fn extraction_verification_failed(detail: impl fmt::Display) -> Self {
         Self::new(
             Code::ExtractionVerificationFailed,
-            format!(
-                "extraction verification failed - missing directories: {}",
-                missing.join(", ")
-            ),
+            format!("extraction verification failed: {detail}"),
         )
     }
 

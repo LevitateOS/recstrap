@@ -159,13 +159,9 @@ fn make_plan(root: &Path, flags: RequestFlags) -> Result<plan::Plan> {
 }
 
 fn print_target(target: &target::Target) {
-    let name = |v: &dyn erased::Name| v.name();
     println!(
         "recsetup: {} at {} ({}, {})",
-        target.os_name,
-        target.root,
-        name(&target.init),
-        name(&target.libc)
+        target.os_name, target.root, target.profile.init, target.profile.libc
     );
 }
 
@@ -201,18 +197,6 @@ fn print_warnings(warnings: &[String]) {
         println!("\nWarnings:");
         for w in warnings {
             println!("  {w}");
-        }
-    }
-}
-
-/// The snake_case names the JSON uses, for the human summary line.
-mod erased {
-    pub trait Name {
-        fn name(&self) -> String;
-    }
-    impl<T: serde::Serialize> Name for T {
-        fn name(&self) -> String {
-            serde_json::to_value(self).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
         }
     }
 }

@@ -45,20 +45,16 @@ fn main() -> ExitCode {
     }
 }
 
-/// The target's own login shell for root, so an interactive chroot works on
-/// any distro (Acorn ships ash, not bash). Falls back to POSIX `/bin/sh`.
+/// The PATH of every command in the chroot, interactive or run by recsetup: the
+/// standard directories of the target, not the caller's (whose entries need not
+/// exist in the target, and may lack the sbin directories).
+const CHROOT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+/// The target's own login shell for root.
 fn target_root_shell(root: &Path) -> String {
-    std::fs::read_to_string(root.join("etc/passwd"))
-        .ok()
-        .and_then(|passwd| {
-            passwd
-                .lines()
-                .find(|line| line.starts_with("root:"))
-                .and_then(|line| line.split(':').nth(6))
-                .filter(|shell| !shell.is_empty())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| "/bin/sh".to_string())
+    install_tools::target_system::root_shell(
+        &std::fs::read_to_string(root.join("etc/passwd")).unwrap_or_default(),
+    )
 }
 
 fn run() -> Result<u8> {
@@ -105,6 +101,7 @@ fn run() -> Result<u8> {
         .arg(&root)
         .arg(cmd)
         .args(cmd_args)
+        .env("PATH", CHROOT_PATH)
         .status();
     session.close()?;
     let status = status.map_err(|e| Error::command_failed("chroot", e))?;

@@ -3,7 +3,8 @@
 //! plan is also the manual install for anyone who would rather type it.
 
 use crate::request::{check_hostname, check_username, invalid, BootMode, SetupRequest};
-use crate::target::{self, BootloaderMethod, InitSystem, LocaleMethod, Root, Target};
+use crate::target::{self, BootloaderMethod, Root, Target};
+use distro_profile::InitSystem;
 use install_tools::error::{Code, Error, Result};
 use install_tools::guard::mount_table;
 use recinit::live::LIVE_MEDIA_DIR;
@@ -265,53 +266,31 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         );
     }
     if let Some(locale) = &request.locale {
-        let locales = target::locales(&root, &target);
-        let Some((choice, source)) = locales.iter().find(|(c, _)| &c.name == locale) else {
+        if !target::locales(&root, target.profile.libc).iter().any(|c| &c.name == locale) {
             return Err(unavailable(
                 format!("locale '{locale}' is not available in the target"),
                 inspect_hint("locales"),
             ));
-        };
-        let mut args = vec!["locale", locale.as_str(), "precompiled"];
-        if !choice.compiled {
-            let source = source.as_ref().expect("an uncompiled locale has a source");
-            match target.locale_method {
-                LocaleMethod::LocaleGen => {
-                    args = vec!["locale", locale, "locale_gen", &source.line]
-                }
-                LocaleMethod::Localedef => {
-                    args = vec![
-                        "locale",
-                        locale,
-                        "localedef",
-                        &source.input,
-                        &source.charset,
-                    ]
-                }
-                LocaleMethod::Precompiled | LocaleMethod::Musl => {
-                    unreachable!("these list compiled locales only")
-                }
-            }
         }
         b.setup(
             Section::Locale,
             format!("Set the system locale to {locale}"),
-            &args,
+            &["locale", locale],
         );
     }
     if let Some(keymap) = &request.keymap {
-        if !target::keymaps(&root, target.init).contains(keymap) {
+        let init = target.profile.init;
+        if !target::keymaps(&root, init).contains(keymap) {
             return Err(unavailable(
                 format!("keymap '{keymap}' is not in the target"),
                 inspect_hint("keymaps"),
             ));
         }
-        if target.init == InitSystem::Openrc
-            && !root.is_file("etc/init.d/keymaps")
-            && !root.is_file("etc/init.d/loadkeys")
-            && !root.is_file("etc/init.d/loadkmap")
-        {
-            warnings.push("the target has no keymaps, loadkeys or loadkmap service, so nothing loads the keymap at boot".into());
+        let loader = target::keymap_loader(init);
+        if !root.is_file(loader) {
+            warnings.push(format!(
+                "the target has no /{loader}, so nothing loads the keymap at boot"
+            ));
         }
         b.setup(
             Section::Keymap,
@@ -333,12 +312,6 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         password_users.push("root".to_string());
     }
     if !request.users.is_empty() {
-        if target.account_tool.is_none() {
-            return Err(unavailable(
-                "the target has neither useradd nor adduser",
-                "deploy a complete system first",
-            ));
-        }
         let groups = target::account_names(&root, "etc/group");
         let existing_users = target::account_names(&root, "etc/passwd");
         let mut seen = Vec::new();
@@ -363,12 +336,20 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
             }
             let mut user_groups = Vec::new();
             if user.admin {
-                user_groups.push(target.admin.group.clone());
-                if target.admin.tool.is_none() {
-                    warnings.push("the target ships neither sudo nor doas; the admin group cannot become root".into());
-                } else if !target.admin.rule_present {
+                let admin = &target.admin;
+                user_groups.push(admin.group.clone());
+                if !root.has_program(admin.tool.as_str()) {
+                    warnings.push(format!(
+                        "the target's profile names {}, which it does not ship; the admin group cannot become root",
+                        admin.tool
+                    ));
+                } else if !admin.rule_present {
                     return Err(unavailable(
-                        "the target lacks its recipe-owned administrator rule",
+                        format!(
+                            "the target lacks its recipe-owned administrator rule ('{}' in {})",
+                            admin.tool.admin_rule(),
+                            admin.rule_file
+                        ),
                         "fix the system recipe; recsetup does not supply missing package policy",
                     ));
                 }
@@ -433,7 +414,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         let initrd = match &boot.initrd {
             Some(path) if path.as_os_str().is_empty() => None,
             Some(path) => Some(path.clone()),
-            None if target.init == InitSystem::Systemd => Some(live(INSTALLED_INITRAMFS)),
+            None if target.profile.init == InitSystem::Systemd => Some(live(INSTALLED_INITRAMFS)),
             None => None,
         };
         if let Some(initrd) = &initrd {
@@ -669,23 +650,18 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         );
     }
     if !request.services.is_empty() {
-        let available = target::services(&root, target.init);
-        for service in &request.services {
-            let name = if target.init == InitSystem::Systemd && !service.contains('.') {
-                format!("{service}.service")
-            } else {
-                service.clone()
-            };
-            if !available.iter().any(|s| s.name == name) {
+        let available = target::services(&root, target.profile.init);
+        for name in &request.services {
+            if !available.iter().any(|s| &s.name == name) {
                 return Err(unavailable(
-                    format!("service '{service}' is not in the target"),
+                    format!("service '{name}' is not in the target"),
                     inspect_hint("services"),
                 ));
             }
             b.setup(
                 Section::Services,
                 format!("Start {name} at boot"),
-                &["service", &name],
+                &["service", name],
             );
         }
     }

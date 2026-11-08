@@ -17,8 +17,6 @@ use std::process::{Command, Stdio};
 
 pub const APPLY_SCHEMA_VERSION: u32 = 1;
 
-const TARGET_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
@@ -204,10 +202,9 @@ fn run(root: &Root, step: &Step, passwords: Option<&str>) -> std::result::Result
             write(root, to, &bytes, 0o644)
         })()),
         Action::Chroot { argv, passwords: wants } => {
+            // recchroot gives the command the target's own PATH.
             let mut command = Command::new(recchroot());
-            // The target's own directories, whatever the caller's PATH is
-            // (Alpine keeps rc-update in /sbin).
-            command.arg(root.path()).arg("--").args(argv).env("PATH", TARGET_PATH);
+            command.arg(root.path()).arg("--").args(argv);
             let stdin = if *wants { passwords } else { None };
             exec(command, &argv[0], stdin)
         }
