@@ -59,11 +59,18 @@ pub struct ApplyOptions {
 /// error is returned beside it.
 pub fn apply(plan: Plan, opts: &ApplyOptions) -> (ApplyResult, Option<Error>) {
     let mut warnings = plan.warnings.clone();
+    let mut progress=if opts.dry_run {None}else {
+        if !is_root() {let e=Error::not_root();return(result(&plan,opts,warnings,plan_records(&plan,Status::NotRun),Some(&e)),Some(e));}
+        match crate::progress::Progress::open(&plan) {
+            Ok(p)=>Some(p),Err(e)=>return(result(&plan,opts,warnings,plan_records(&plan,Status::NotRun),Some(&e)),Some(e)),
+        }
+    };
+    let needs_passwords=plan.steps.iter().any(|step|!progress.as_ref().is_some_and(|p|p.done(step)) && matches!(&step.action,Action::Chroot{passwords:true,..}));
     let preflight = || -> Result<Option<String>> {
         if !is_root() {
             return Err(Error::not_root().fix("run recsetup apply as root on the live system"));
         }
-        if plan.password_users.is_empty() {
+        if !needs_passwords {
             return Ok(None);
         }
         if !opts.passwords_stdin {
@@ -98,13 +105,25 @@ pub fn apply(plan: Plan, opts: &ApplyOptions) -> (ApplyResult, Option<Error>) {
             records.push(record(step, Status::NotRun, None));
             continue;
         }
+        if progress.as_ref().is_some_and(|p|p.done(step)) {
+            records.push(record(step,Status::Done,Some((0,"Completed by this installation's earlier attempt".into(),String::new()))));
+            continue;
+        }
         match run(&plan.root, step, passwords.as_deref()) {
-            Ok(out) => records.push(record(step, Status::Done, out)),
+            Ok(out) => {
+                match progress.as_mut().unwrap().completed(step) {
+                    Ok(())=>records.push(record(step,Status::Done,out)),
+                    Err(e)=>{records.push(record(step,Status::Failed,out));failure=Some(e);},
+                }
+            },
             Err((err, out)) => {
                 records.push(record(step, Status::Failed, out));
                 failure = Some(err);
             }
         }
+    }
+    if failure.is_none() {
+        if let Err(e)=progress.as_mut().unwrap().finish(){failure=Some(e);}
     }
     (result(&plan, opts, warnings, records, failure.as_ref()), failure)
 }
@@ -232,7 +251,7 @@ fn exec(mut command: Command, name: &str, stdin: Option<&str>) -> std::result::R
     match failed {
         None => Ok(Some((code, stdout, stderr))),
         Some(err) => Err((
-            err.fix("fix the cause shown in the step's output, then run the plan again; finished steps are safe to repeat"),
+            err.fix("fix the cause shown in the step's output, then run the plan again; completed steps are reused from installation progress"),
             Some((code, stdout, stderr)),
         )),
     }

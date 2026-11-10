@@ -10,6 +10,7 @@
 
 mod apply;
 mod plan;
+mod progress;
 mod request;
 mod target;
 

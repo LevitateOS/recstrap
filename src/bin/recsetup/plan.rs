@@ -164,12 +164,13 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
             ],
         },
     );
+    let machine_id = request.machine_id || request.boot.as_ref().is_some_and(|b| b.mode==InstallMode::Ab);
     let personalization = request.timezone.is_some()
         || request.locale.is_some()
         || request.keymap.is_some()
         || request.hostname.is_some()
         || !request.users.is_empty()
-        || request.machine_id
+        || machine_id
         || request.autologin.is_some()
         || !request.services.is_empty();
     if personalization && !root.is_file(SETUP_PROGRAM) {
@@ -387,7 +388,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         );
     }
 
-    if request.machine_id {
+    if machine_id {
         b.setup(
             Section::MachineId,
             "Initialize this machine's identity",
@@ -411,6 +412,9 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         }
     }
 
+    if request.boot.as_ref().is_some_and(|boot|boot.mode==InstallMode::Ab) {
+        b.setup(Section::MachineId,"Seed enabled SSH host keys before copying either system",&["host-keys"]);
+    }
     // Capture the generation only after machine identity and services are seeded.
     if let Some(boot) = &request.boot {
         let live = |path: &str| PathBuf::from(format!("{LIVE_MEDIA_DIR}/{path}"));
@@ -549,7 +553,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
             argv.extend(["--options".into(), options.trim().to_string()]);
         }
         let what = match boot.mode {
-            InstallMode::Ab => "Install systemd-boot, write both slots' boot entries, slot A's kernel and recab's state",
+            InstallMode::Ab => "Copy the personalized system into both slots, seal them and publish both boot entries",
             InstallMode::Mutable => "Install systemd-boot, the kernel and the boot entry",
         };
         b.push(Section::Boot, what, Action::Host { argv });

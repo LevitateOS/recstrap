@@ -154,7 +154,7 @@ boot devices against it, comparing device numbers so `/dev/disk/by-*` names and
 other symlinks work: `--root-device` (mutable) or `--slot-a` (A/B) must be the
 partition mounted at `--root`, and `--slot-b` must not be (E035). The ESP may
 be on another disk.
-The initramfs it installs defaults, on systemd systems, to the installed
+The initramfs it installs defaults, on both init systems, to the installed
 system's own (`boot/initramfs-installed.img` on the live medium, built by the
 release from the rootfs the ISO installs); the live medium's `boot/initramfs.img`
 is refused (E030), since it only finds the live medium and ignores `root=`.
@@ -162,3 +162,18 @@ Passwords are supplied only at installation. This works offline without shipping
 a compiler image or Ginux build runtime on the live ISO. Storage inspection,
 ESP deployment and boot activation remain operations of the install tools and
 recab. recstrap continues to validate and extract the selected image.
+
+For A/B installation, recsetup finishes all requested personalization before
+calling recab init. It seeds machine identity and keys for enabled SSH services;
+recab then populates B from A, validates equivalent personalized generations,
+seals both roots and publishes both boot entries. Choose services and save network
+configuration before this final boot step, while the target root is writable.
+
+Apply records its request, target filesystem identity and completed commands in
+`/var/lib/recsetup/apply.json`, under a separate apply lock. Passwords are never
+stored. Retry the same unfinished request: completed steps are skipped and
+completed password steps need no repeated stdin. An unfinished request cannot be
+replaced with different settings. Completed pre-boot requests may be followed by
+another configuration request. The boot command always revalidates initialization
+on retry; it cannot reset a later live generation or preparation. Original image
+baselines are captured once, before personalization, and retained on retries.
