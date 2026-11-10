@@ -27,8 +27,16 @@ pub fn extract_erofs(rootfs: &Path, target: &Path, events: bool) -> Result<(u64,
     session.mount_image(rootfs, "erofs", &mount_point)?;
 
     let used_at_start = used_bytes(target)?;
+    // What the image holds, and room for the target filesystem's own
+    // overhead (inodes, directories, block rounding): refused before
+    // anything is copied when the target cannot take it.
+    let (total_entries, total_bytes) = count(&mount_point)?;
+    let needed = total_bytes + total_bytes / 10 + 64 * 1024 * 1024;
+    let available = crate::guards::free_bytes(target)?;
+    if available < needed {
+        return Err(Error::insufficient_space(needed / (1024 * 1024), available / (1024 * 1024)));
+    }
     if events {
-        let (total_entries, total_bytes) = count(&mount_point)?;
         println!(
             "{}",
             to_json_line(&StrapEvent::Start {

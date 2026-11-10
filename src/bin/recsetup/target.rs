@@ -5,7 +5,7 @@
 //! a scratch directory are inspected the same way, and nothing here changes
 //! the target.
 
-use distro_profile::{os_release_value, InitSystem, Libc, PrivilegeTool, Profile, ADMIN_GROUP};
+use distro_profile::{os_release_value, Flavour, InitSystem, Libc, PrivilegeTool, Profile, ADMIN_GROUP};
 use install_tools::error::{Code, Error, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -142,6 +142,10 @@ pub struct Target {
     pub os_name: String,
     /// The distro profile from the target's os-release.
     pub profile: Profile,
+    /// Which system it is: the base system, or the desktop system (whose users
+    /// get the desktop session's groups, an X11 keyboard layout and can log in
+    /// by themselves).
+    pub flavour: Flavour,
     pub admin: Admin,
     /// The time zone database is installed (without it only UTC exists).
     pub has_zoneinfo: bool,
@@ -162,6 +166,7 @@ pub fn detect(root: &Root) -> Result<Target> {
     let os_release = target_root::os_release(root.path())?
         .ok_or_else(|| no_profile("no etc/os-release or usr/lib/os-release".to_string()))?;
     let profile = Profile::from_os_release(&os_release).map_err(|e| no_profile(e.to_string()))?;
+    let flavour = Flavour::from_os_release(&os_release).map_err(|e| no_profile(e.to_string()))?;
     let os_id = os_release_value(&os_release, "ID")
         .unwrap_or_else(|| "linux".to_string())
         .to_ascii_lowercase();
@@ -193,6 +198,7 @@ pub fn detect(root: &Root) -> Result<Target> {
         os_id,
         os_name,
         profile,
+        flavour,
         admin,
         has_zoneinfo: root.is_dir(ZONEINFO),
         default_shell,
@@ -456,4 +462,72 @@ pub fn services(root: &Root, init: InitSystem) -> Result<Vec<ServiceChoice>> {
         .into_iter()
         .map(|(name, enabled_in)| ServiceChoice { name, enabled_in })
         .collect())
+}
+
+/// The X11 keyboard layout (and variant) that matches the console keymap
+/// `keymap` in the target, for a desktop system's display server, login
+/// screen and session; `None` when none matches. systemd's own table of them
+/// (`kbd-model-map`) decides where the target has it; otherwise the keymap's
+/// name, a few known renames and its base before the first `-`, whichever is
+/// a layout of the target's XKB rules.
+pub fn x11_layout(root: &Root, keymap: &str) -> Result<Option<(String, Option<String>)>> {
+    if let Some(map) = root.read("usr/share/systemd/kbd-model-map")? {
+        for line in map.lines().filter(|line| !line.trim_start().starts_with('#')) {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() >= 4 && fields[0] == keymap {
+                let variant = (fields[3] != "-").then(|| fields[3].to_string());
+                return Ok(Some((fields[1].to_string(), variant)));
+            }
+        }
+    }
+    let mut rules = None;
+    for path in ["usr/share/X11/xkb/rules/base.lst", "usr/share/xkeyboard-config-2/rules/base.lst"] {
+        if rules.is_none() {
+            rules = root.read(path)?;
+        }
+    }
+    let Some(rules) = rules else { return Ok(None) };
+    let mut section = "";
+    let mut layouts = Vec::new();
+    let mut variants = Vec::new();
+    for line in rules.lines() {
+        if let Some(name) = line.strip_prefix("! ") {
+            section = name.trim();
+            continue;
+        }
+        let mut words = line.split_whitespace();
+        match (section, words.next(), words.next()) {
+            ("layout", Some(layout), _) => layouts.push(layout.to_string()),
+            ("variant", Some(variant), Some(layout)) => {
+                variants.push((layout.trim_end_matches(':').to_string(), variant.to_string()))
+            }
+            _ => {}
+        }
+    }
+    const RENAMES: &[(&str, &str, Option<&str>)] = &[
+        ("uk", "gb", None),
+        ("sv-latin1", "se", None),
+        ("jp106", "jp", None),
+        ("slovene", "si", None),
+        ("croat", "hr", None),
+        ("et", "ee", None),
+        ("trq", "tr", None),
+        ("dvorak", "us", Some("dvorak")),
+        ("colemak", "us", Some("colemak")),
+    ];
+    let mut candidates: Vec<(String, Option<String>)> = Vec::new();
+    if let Some((_, layout, variant)) = RENAMES.iter().find(|(name, _, _)| *name == keymap) {
+        candidates.push((layout.to_string(), variant.map(str::to_string)));
+    }
+    candidates.push((keymap.to_string(), None));
+    if let Some((base, _)) = keymap.split_once('-') {
+        candidates.push((base.to_string(), None));
+    }
+    let Some((layout, mut variant)) = candidates.into_iter().find(|(layout, _)| layouts.contains(layout)) else {
+        return Ok(None);
+    };
+    if variant.is_none() && keymap.contains("nodeadkeys") && variants.contains(&(layout.clone(), "nodeadkeys".to_string())) {
+        variant = Some("nodeadkeys".to_string());
+    }
+    Ok(Some((layout, variant)))
 }

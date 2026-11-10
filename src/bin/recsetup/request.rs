@@ -28,6 +28,10 @@ pub struct SetupRequest {
     pub root_password: bool,
     #[serde(default)]
     pub users: Vec<UserRequest>,
+    /// On a desktop system: the user its display manager logs in without
+    /// asking at every boot. Unset (the default): the login screen asks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autologin: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boot: Option<BootRequest>,
     /// Give the system its machine id.
@@ -114,6 +118,9 @@ pub struct RequestFlags {
     /// Create a user in the admin group with the default shell; its password is read from stdin at apply (repeatable)
     #[arg(long = "user", value_name = "NAME")]
     pub users: Vec<String>,
+    /// On a desktop system, log this user in at every boot without asking (off by default)
+    #[arg(long, value_name = "NAME")]
+    pub autologin: Option<String>,
     /// Install systemd-boot and write the boot entries for this layout
     #[arg(long, value_enum)]
     pub boot: Option<BootMode>,
@@ -170,6 +177,7 @@ impl RequestFlags {
         set(&mut request.locale, self.locale);
         set(&mut request.keymap, self.keymap);
         set(&mut request.hostname, self.hostname);
+        set(&mut request.autologin, self.autologin);
         request.root_password |= self.root_password;
         request.machine_id |= self.machine_id;
         for name in self.users {

@@ -10,6 +10,7 @@ use recinit::live::{
     INITRAMFS_INSTALLED_ISO_PATH, INITRAMFS_LIVE_ISO_PATH, KERNEL_ISO_PATH, LIVE_MEDIA_DIR,
 };
 use recpart::types::InstallMode;
+use distro_profile::{Flavour, DESKTOP_SESSION_GROUPS};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -25,6 +26,8 @@ pub enum Section {
     Hostname,
     Users,
     Passwords,
+    /// A desktop system's display manager logging a user in by itself.
+    Autologin,
     /// systemd-boot, the boot entries and the installed kernel (recab init).
     Boot,
     MachineId,
@@ -167,6 +170,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         || request.hostname.is_some()
         || !request.users.is_empty()
         || request.machine_id
+        || request.autologin.is_some()
         || !request.services.is_empty();
     if personalization && !root.is_file(SETUP_PROGRAM) {
         return Err(unavailable(
@@ -219,6 +223,26 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
             format!("Set the console keymap to {keymap}"),
             &["keymap", keymap],
         );
+        // A desktop system's display server, login screen and session take
+        // the X11 layout of the same keyboard.
+        if target.flavour == Flavour::Desktop {
+            match target::x11_layout(&root, keymap)? {
+                Some((layout, variant)) => {
+                    let shown = match &variant {
+                        Some(variant) => format!("{layout} ({variant})"),
+                        None => layout.clone(),
+                    };
+                    let mut args = vec!["x11-keyboard", layout.as_str()];
+                    if let Some(variant) = &variant {
+                        args.push(variant);
+                    }
+                    b.setup(Section::Keymap, format!("Set the desktop's keyboard layout to {shown}"), &args);
+                }
+                None => warnings.push(format!(
+                    "no X11 keyboard layout matches the keymap '{keymap}'; the desktop keeps its default (us)"
+                )),
+            }
+        }
     }
     if let Some(hostname) = &request.hostname {
         check_hostname(hostname)?;
@@ -281,6 +305,15 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                     user_groups.push(g.clone());
                 }
             }
+            // A desktop session uses the devices and services these groups
+            // own; the user joins those the system has.
+            if target.flavour == Flavour::Desktop {
+                for g in DESKTOP_SESSION_GROUPS {
+                    if groups.iter().any(|existing| existing == g) && !user_groups.iter().any(|have| have == g) {
+                        user_groups.push(g.to_string());
+                    }
+                }
+            }
             for g in &user_groups {
                 if !groups.contains(g) {
                     return Err(unavailable(
@@ -323,6 +356,34 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                 argv: vec!["chpasswd".into()],
                 passwords: true,
             },
+        );
+    }
+
+    if let Some(user) = &request.autologin {
+        if target.flavour != Flavour::Desktop {
+            return Err(unavailable(
+                "only a desktop system logs a user in by itself",
+                "leave --autologin out on the base system",
+            ));
+        }
+        let created = request.users.iter().any(|u| &u.name == user);
+        if user == "root" || !(created || target::account_names(&root, "etc/passwd")?.contains(user)) {
+            return Err(invalid(
+                format!("'{user}' is not a user of this system"),
+                "name a user the request creates (--user) or one the system has, not root",
+            ));
+        }
+        if !root.has_program("sddm") {
+            return Err(unavailable(
+                "the target has no SDDM, whose autologin this sets",
+                "deploy the desktop system produced by its current system recipe",
+            ));
+        }
+        let session = target.profile.desktop.session();
+        b.setup(
+            Section::Autologin,
+            format!("Log {user} in to the desktop at every boot without asking"),
+            &["autologin", user, session],
         );
     }
 

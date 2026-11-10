@@ -15,9 +15,9 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-/// A rootfs expands to roughly this much; checked up front so a full disk
-/// fails before extraction starts rather than half-way through. The exact
-/// size is unknown until the image is mounted.
+/// The least any rootfs needs, checked before the image is mounted; once it
+/// is, extraction checks the image's own size (`rootfs::extract_erofs`), so a
+/// larger system (the desktop's) also fails before copying, not half-way.
 const MIN_FREE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
