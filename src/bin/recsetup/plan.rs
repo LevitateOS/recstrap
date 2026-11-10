@@ -387,6 +387,31 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         );
     }
 
+    if request.machine_id {
+        b.setup(
+            Section::MachineId,
+            "Initialize this machine's identity",
+            &["machine-id"],
+        );
+    }
+    if !request.services.is_empty() {
+        let available = target::services(&root, target.profile.init)?;
+        for name in &request.services {
+            if !available.iter().any(|s| &s.name == name) {
+                return Err(unavailable(
+                    format!("service '{name}' is not in the target"),
+                    inspect_hint("services"),
+                ));
+            }
+            b.setup(
+                Section::Services,
+                format!("Start {name} at boot"),
+                &["service", name],
+            );
+        }
+    }
+
+    // Capture the generation only after machine identity and services are seeded.
     if let Some(boot) = &request.boot {
         let live = |path: &str| PathBuf::from(format!("{LIVE_MEDIA_DIR}/{path}"));
         let kernel = boot.kernel.clone().unwrap_or_else(|| live(KERNEL_ISO_PATH));
@@ -528,30 +553,6 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
             InstallMode::Mutable => "Install systemd-boot, the kernel and the boot entry",
         };
         b.push(Section::Boot, what, Action::Host { argv });
-    }
-
-    if request.machine_id {
-        b.setup(
-            Section::MachineId,
-            "Initialize this machine's identity",
-            &["machine-id"],
-        );
-    }
-    if !request.services.is_empty() {
-        let available = target::services(&root, target.profile.init)?;
-        for name in &request.services {
-            if !available.iter().any(|s| &s.name == name) {
-                return Err(unavailable(
-                    format!("service '{name}' is not in the target"),
-                    inspect_hint("services"),
-                ));
-            }
-            b.setup(
-                Section::Services,
-                format!("Start {name} at boot"),
-                &["service", name],
-            );
-        }
     }
 
     let steps = b.steps;
