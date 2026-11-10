@@ -57,3 +57,32 @@ fn test_mutable_boot_needs_root_mounted() {
 fn test_ab_boot_needs_root_mounted() {
     assert_root_not_mounted_refused(&["--boot", "ab", "--slot-a", "/dev/null", "--slot-b", "/dev/zero"]);
 }
+
+#[test]
+fn inspect_lists_choices_as_text_and_keeps_full_json() {
+    let (root, _) = fake_target();
+    let zoneinfo = root.path().join("usr/share/zoneinfo/Europe");
+    std::fs::create_dir_all(&zoneinfo).unwrap();
+    std::fs::write(zoneinfo.join("Brussels"), b"TZif").unwrap();
+    let hostname = root.path().join("etc/hostname");
+    std::fs::write(&hostname, "unchanged\n").unwrap();
+
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_recsetup"))
+            .args(["inspect", "--root"])
+            .arg(root.path())
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let text = run(&["--list", "timezones"]);
+    assert!(text.status.success(), "{}", String::from_utf8_lossy(&text.stderr));
+    assert!(String::from_utf8_lossy(&text.stdout).lines().any(|line| line == "Europe/Brussels"));
+    let json = run(&["--json"]);
+    assert!(json.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(document["schema_version"], 1);
+    assert!(document["choices"]["timezones"].as_array().unwrap().iter().any(|zone| zone["name"] == "Europe/Brussels"));
+    assert_eq!(std::fs::read_to_string(hostname).unwrap(), "unchanged\n");
+    assert_eq!(run(&["--list", "timezones", "--json"]).status.code(), Some(2));
+}

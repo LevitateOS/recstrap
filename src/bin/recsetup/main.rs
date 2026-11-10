@@ -15,7 +15,7 @@ mod target;
 
 use apply::ApplyOptions;
 use install_tools::output::{to_json, ErrorPayload};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use install_tools::error::{Error, Result};
 use target_root::is_protected_path;
 use install_tools::session::resolve_target;
@@ -29,6 +29,7 @@ use target::Root;
 #[command(name = "recsetup")]
 #[command(version)]
 #[command(about = "Set up an extracted system: time zone, locale, keymap, hostname, accounts, boot and services")]
+#[command(after_help = "Start here:\n  recsetup inspect --root /mnt\n  recsetup inspect --root /mnt --list timezones\n  recsetup plan --root /mnt --hostname my-pc --timezone Europe/Brussels\n  recsetup apply --root /mnt --hostname my-pc --timezone Europe/Brussels\n\ninspect and plan leave the target unchanged. apply runs the requested changes.\nFor users/passwords and boot options: recsetup apply --help")]
 struct Cli {
     /// Emit machine-readable JSON (errors too, on stderr)
     #[arg(long, global = true)]
@@ -45,6 +46,9 @@ enum Commands {
         /// The extracted system's root
         #[arg(long, default_value = "/mnt")]
         root: PathBuf,
+        /// Show the available choices as text, one per line
+        #[arg(long, value_enum, conflicts_with = "json")]
+        list: Option<ChoiceList>,
     },
     /// Check a request and print the exact commands, without running them
     Plan {
@@ -68,6 +72,17 @@ enum Commands {
         #[arg(long)]
         passwords_stdin: bool,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ChoiceList {
+    Timezones,
+    Locales,
+    Keymaps,
+    Shells,
+    Groups,
+    Users,
+    Services,
 }
 
 fn report_error(err: &Error, json: bool) -> ExitCode {
@@ -99,11 +114,13 @@ fn open_root(path: &Path, writes: bool) -> Result<Root> {
 
 fn run(command: Commands, json: bool) -> Result<ExitCode> {
     match command {
-        Commands::Inspect { root } => {
+        Commands::Inspect { root, list } => {
             let root = open_root(&root, false)?;
             let target = target::detect(&root)?;
             let choices = target::choices(&root, &target)?;
-            if json {
+            if let Some(list) = list {
+                print_choices(&choices, list);
+            } else if json {
                 #[derive(Serialize)]
                 struct Inspect<'a> {
                     schema_version: u32,
@@ -118,7 +135,9 @@ fn run(command: Commands, json: bool) -> Result<ExitCode> {
                 println!("  keymaps:    {}", choices.keymaps.len());
                 println!("  shells:     {}", choices.shells.join(" "));
                 println!("  services:   {}", choices.services.len());
-                println!("\nThe full lists: recsetup inspect --root {} --json", target.root);
+                println!("\nList choices: recsetup inspect --root '{}' --list <CATEGORY>", target.root.replace('\'', "'\\''"));
+                println!("  Categories: timezones, locales, keymaps, shells, groups, users, services");
+                println!("Preview changes: recsetup plan --root '{}' --hostname my-pc", target.root.replace('\'', "'\\''"));
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -128,6 +147,7 @@ fn run(command: Commands, json: bool) -> Result<ExitCode> {
                 println!("{}", to_json(&plan));
             } else {
                 print_target(&plan.target);
+                println!("Preview only: no changes made.");
                 print_steps(plan.steps.iter().map(|s| (s, None)));
                 print_warnings(&plan.warnings);
             }
@@ -140,14 +160,44 @@ fn run(command: Commands, json: bool) -> Result<ExitCode> {
                 println!("{}", to_json(&result));
             } else {
                 print_target(&result.target);
+                if dry_run {
+                    println!("Dry run: no changes made.");
+                }
                 print_steps(result.steps.iter().map(|r| (&r.step, Some(r))));
                 print_warnings(&result.warnings);
+                if !dry_run && err.is_none() && !result.steps.is_empty() {
+                    println!("\nCompleted {} setup steps.", result.steps.len());
+                }
             }
             Ok(match err {
                 Some(err) => report_error(&err, json),
                 None => ExitCode::SUCCESS,
             })
         }
+    }
+}
+
+fn print_choices(choices: &target::Choices, list: ChoiceList) {
+    let lines: Vec<String> = match list {
+        ChoiceList::Timezones => choices.timezones.iter().map(|v| v.name.clone()).collect(),
+        ChoiceList::Locales => choices.locales.iter().map(|v| v.name.clone()).collect(),
+        ChoiceList::Keymaps => choices.keymaps.clone(),
+        ChoiceList::Shells => choices.shells.clone(),
+        ChoiceList::Groups => choices.groups.clone(),
+        ChoiceList::Users => choices.users.clone(),
+        ChoiceList::Services => choices.services.iter().map(|v| {
+            if v.enabled_in.is_empty() {
+                v.name.clone()
+            } else {
+                format!("{} (enabled in: {})", v.name, v.enabled_in.join(", "))
+            }
+        }).collect(),
+    };
+    if lines.is_empty() {
+        println!("No choices found in this target.");
+    }
+    for line in lines {
+        println!("{line}");
     }
 }
 

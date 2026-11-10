@@ -37,6 +37,7 @@ use rootfs::extract_erofs;
     This is the pacstrap equivalent - it only extracts files; \
     the live install docs describe the rest of the installation."
 )]
+#[command(after_help = "Examples:\n  recstrap /mnt --check       Check the target without extracting\n  recstrap /mnt               Extract the live ISO's system image\n  recstrap /mnt --rootfs /path/to/filesystem.erofs\n\nAfter extraction: preview fstab with 'recfstab /mnt', write it with\n'recfstab /mnt --write', then inspect configuration with 'recsetup inspect --root /mnt'.")]
 struct Args {
     /// Target directory (must be mounted, e.g., /mnt)
     target: String,
@@ -176,6 +177,7 @@ fn run(args: Args) -> Result<()> {
     }
     if !quiet {
         eprintln!("Extracted {} to {}.", rootfs_str, target_str);
+        eprintln!("Next: run recfstab on the target to review its mounts, then recsetup to configure the system.");
     }
 
     Ok(())

@@ -28,6 +28,13 @@ recstrap --json /mnt
 recstrap --check --json /mnt
 ```
 
+The shell setup flow is available without a TUI: `recfstab /mnt` previews mount
+entries, `recfstab /mnt --write` writes them, and `recsetup inspect --root /mnt`
+describes the extracted system. List setup choices as text with
+`recsetup inspect --root /mnt --list timezones` (also `locales`, `keymaps`,
+`shells`, `groups`, `users`, or `services`). `recsetup plan` previews commands;
+`recsetup apply` runs them. Every tool's `--help` includes usage examples.
+
 With `--json`, each stdout line is one event: `start` (the image's entry count and
 size, once it is mounted and counted), `progress` (entries copied, counted from
 `cp -v`, and bytes in use on the target's filesystem since the start; about five a

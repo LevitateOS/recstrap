@@ -17,6 +17,7 @@ use std::process::ExitCode;
     update makes. Designed for system \
     installation workflows where you need to generate /etc/fstab for a newly installed system."
 )]
+#[command(after_help = "Examples:\n  recfstab /mnt                   Preview entries; leave fstab unchanged\n  recfstab /mnt --write           Append entries to /mnt/etc/fstab\n  recfstab /mnt --write --replace  Replace entries for these mount points\n\nMount the target's root, boot and other filesystems before generating entries.\nPlain stdout is valid fstab text, so 'recfstab /mnt > fstab.preview' also works.")]
 struct Args {
     /// Root directory to scan for mounted filesystems (e.g., /mnt)
     root: String,

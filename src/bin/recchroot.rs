@@ -19,6 +19,7 @@ use target_root::{is_protected_path, is_root};
 #[command(name = "recchroot")]
 #[command(version)]
 #[command(about = "Enter chroot with proper bind mounts (like arch-chroot)")]
+#[command(after_help = "Examples:\n  recchroot /mnt                 Open the target's root shell\n  recchroot /mnt passwd          Set the target's root password\n  recchroot /mnt /bin/sh -c 'cat /etc/os-release'\n\nRequires root. The target's /dev, /proc, /sys and /run are prepared for the\ncommand and cleaned up when it exits. Type 'exit' to leave the target shell.")]
 struct Args {
     /// Chroot directory (e.g., /mnt)
     chroot_dir: String,
