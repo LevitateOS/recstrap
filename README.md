@@ -175,5 +175,6 @@ stored. Retry the same unfinished request: completed steps are skipped and
 completed password steps need no repeated stdin. An unfinished request cannot be
 replaced with different settings. Completed pre-boot requests may be followed by
 another configuration request. The boot command always revalidates initialization
-on retry; it cannot reset a later live generation or preparation. Original image
-baselines are captured once, before personalization, and retained on retries.
+on retry; it cannot reset a later live generation or preparation. The complete original
+release inventory/account baseline is captured before personalization and
+retained on retries; no carried-path configuration list is required.

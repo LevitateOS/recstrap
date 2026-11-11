@@ -141,12 +141,11 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
     let r = root.path().display().to_string();
     let inspect_hint =
         |what: &str| format!("choose one that `recsetup inspect --root {r}` lists under {what}");
-    // Before anything personalizes the system: what the image ships at the
-    // paths an A/B update carries, so the first update carries only the
-    // machine's changes. recab owns the list and the format.
+    // Capture the complete release inventory before personalization. The same
+    // baseline is retained on retries and used by recab's preserving merge.
     b.push(
         Section::Boot,
-        "Record what the installed image ships where updates carry the machine's state",
+        "Record the original release inventory before personalization",
         Action::Host { argv: vec!["recab".into(), "baseline".into(), "--root".into(), r.clone()] },
     );
     // Homes live in /var/home (the image's /home links there). An A/B
