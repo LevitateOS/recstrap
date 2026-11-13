@@ -309,7 +309,7 @@ fn json_progress_on_a_mounted_layout() {
     }
     std::fs::write(
         tree.join("etc/os-release"),
-        "ID=test\nREC_PACKAGES=rpm\nREC_INIT=systemd\nREC_LIBC=glibc\nREC_PRIVILEGE=sudo\nREC_DESKTOP=plasma\nREC_KERNEL_LINE=lts\n",
+        "ID=test\nREC_PACKAGES=rpm\nREC_INIT=systemd\nREC_LIBC=glibc\nREC_PRIVILEGE=sudo\nREC_DESKTOP=plasma\nREC_KERNEL_LINE=lts\nREC_APPEARANCE=light\n",
     )
     .unwrap();
     for i in 0..300 {

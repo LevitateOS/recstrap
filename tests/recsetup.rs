@@ -18,7 +18,7 @@ fn fake_target() -> (tempfile::TempDir, tempfile::TempDir) {
     std::fs::write(root.path().join("usr/libexec/recipe-system-setup"), b"").unwrap();
     std::fs::write(
         root.path().join("etc/os-release"),
-        b"ID=levitateos\nNAME=LevitateOS\nREC_PACKAGES=rpm\nREC_INIT=systemd\nREC_LIBC=glibc\nREC_PRIVILEGE=sudo\nREC_DESKTOP=plasma\nREC_KERNEL_LINE=lts\nREC_FLAVOUR=base\n",
+        b"ID=levitateos\nNAME=LevitateOS\nREC_PACKAGES=rpm\nREC_INIT=systemd\nREC_LIBC=glibc\nREC_PRIVILEGE=sudo\nREC_DESKTOP=plasma\nREC_KERNEL_LINE=lts\nREC_APPEARANCE=light\nREC_FLAVOUR=base\n",
     )
     .unwrap();
     let media = tempfile::tempdir().expect("create kernel dir");
