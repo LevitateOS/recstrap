@@ -16,6 +16,9 @@ use std::path::{Path, PathBuf};
 
 pub const PLAN_SCHEMA_VERSION: u32 = 1;
 const SETUP_PROGRAM: &str = "/usr/libexec/recipe-system-setup";
+/// Where the live medium carries recab; the A/B boot step installs it at the
+/// same path in the target.
+const LIVE_RECAB: &str = "/usr/bin/recab";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -141,13 +144,6 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
     let r = root.path().display().to_string();
     let inspect_hint =
         |what: &str| format!("choose one that `recsetup inspect --root {r}` lists under {what}");
-    // Capture the complete release inventory before personalization. The same
-    // baseline is retained on retries and used by recab's preserving merge.
-    b.push(
-        Section::Boot,
-        "Record the original release inventory before personalization",
-        Action::Host { argv: vec!["recab".into(), "baseline".into(), "--root".into(), r.clone()] },
-    );
     // Homes live in /var/home (the image's /home links there). An A/B
     // install mounts a fresh STATE partition at /var, which lacks it.
     b.push(
@@ -414,7 +410,8 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
     if request.boot.as_ref().is_some_and(|boot|boot.mode==InstallMode::Ab) {
         b.setup(Section::MachineId,"Seed enabled SSH host keys before copying either system",&["host-keys"]);
     }
-    // Capture the generation only after machine identity and services are seeded.
+    // The boot step comes last: for A/B, root B is copied from root A only
+    // after machine identity and services are seeded.
     if let Some(boot) = &request.boot {
         let live = |path: &str| PathBuf::from(format!("{LIVE_MEDIA_DIR}/{path}"));
         let kernel = boot.kernel.clone().unwrap_or_else(|| live(KERNEL_ISO_PATH));
@@ -525,6 +522,29 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                 }
                 argv.extend(["--slot-a".into(), a.display().to_string()]);
                 argv.extend(["--slot-b".into(), b_dev.display().to_string()]);
+                // recab is on the live medium, never in the system image: only an
+                // A/B system gets it, here, before root A is copied to root B.
+                b.push(
+                    Section::Boot,
+                    "Put the live medium's recab into the A/B system",
+                    Action::Host {
+                        argv: ["install", "-D", "-m", "0755", LIVE_RECAB]
+                            .iter()
+                            .map(|s| s.to_string())
+                            .chain([format!("{r}{LIVE_RECAB}")])
+                            .collect(),
+                    },
+                );
+                b.push(
+                    Section::Boot,
+                    "Install and enable recab's recab-started service in the A/B system",
+                    Action::Host {
+                        argv: ["recab", "install-unit", "--root", &r, "--init", target.profile.init.as_str()]
+                            .iter()
+                            .map(|s| s.to_string())
+                            .collect(),
+                    },
+                );
             }
             InstallMode::Mutable => {
                 if boot.slot_a.is_some() || boot.slot_b.is_some() {
@@ -552,7 +572,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
             argv.extend(["--options".into(), options.trim().to_string()]);
         }
         let what = match boot.mode {
-            InstallMode::Ab => "Copy the personalized system into both slots, seal them and publish both boot entries",
+            InstallMode::Ab => "Copy root A to root B, write both boot entries and make root A the boot default",
             InstallMode::Mutable => "Install systemd-boot, the kernel and the boot entry",
         };
         b.push(Section::Boot, what, Action::Host { argv });

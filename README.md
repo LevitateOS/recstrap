@@ -164,17 +164,18 @@ ESP deployment and boot activation remain operations of the install tools and
 recab. recstrap continues to validate and extract the selected image.
 
 For A/B installation, recsetup finishes all requested personalization before
-calling recab init. It seeds machine identity and keys for enabled SSH services;
-recab then populates B from A, validates equivalent personalized generations,
-seals both roots and publishes both boot entries. Choose services and save network
-configuration before this final boot step, while the target root is writable.
+the boot step. It seeds machine identity and keys for enabled SSH services, then
+puts the live medium's recab into root A with its `recab-started` service
+(`recab install-unit`), and runs `recab init`, which copies root A to root B,
+writes both boot entries and makes A the boot default. recab is on the live
+medium only: a mutable install never gets it, and its one boot entry is written
+by the live medium's `recab init --mode mutable`. Choose services and save
+network configuration before this final boot step.
 
 Apply records its request, target filesystem identity and completed commands in
 `/var/lib/recsetup/apply.json`, under a separate apply lock. Passwords are never
 stored. Retry the same unfinished request: completed steps are skipped and
 completed password steps need no repeated stdin. An unfinished request cannot be
 replaced with different settings. Completed pre-boot requests may be followed by
-another configuration request. The boot command always revalidates initialization
-on retry; it cannot reset a later live generation or preparation. The complete original
-release inventory/account baseline is captured before personalization and
-retained on retries; no carried-path configuration list is required.
+another configuration request. The boot command always runs again on retry; a
+system that `recab init` already set up cannot be personalized afresh.

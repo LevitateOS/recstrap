@@ -127,7 +127,6 @@ impl Progress {
                     .root
                     .read("/var/lib/recab/installation.json")?
                     .is_some()
-                    || plan.root.read("/var/lib/recab/state.json")?.is_some()
                 {
                     return Err(fail("personalization cannot reset an initialized system"));
                 }
