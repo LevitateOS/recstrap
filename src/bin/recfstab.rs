@@ -13,8 +13,8 @@ use std::process::ExitCode;
 #[command(
     long_about = "Reads mounted filesystems under a root directory and outputs \
     fstab entries naming each partition by PARTUUID (or filesystem UUID/LABEL, or PARTLABEL). \
-    PARTUUID is what the boot entries name the root by, and it survives the reformat an A/B \
-    update makes. Designed for system \
+    PARTUUID is what the boot entries name the root by, and it survives `recab copy` creating \
+    the other root's filesystem anew. Designed for system \
     installation workflows where you need to generate /etc/fstab for a newly installed system."
 )]
 #[command(after_help = "Examples:\n  recfstab /mnt                   Preview entries; leave fstab unchanged\n  recfstab /mnt --write           Append entries to /mnt/etc/fstab\n  recfstab /mnt --write --replace  Replace entries for these mount points\n\nMount the target's root, boot and other filesystems before generating entries.\nPlain stdout is valid fstab text, so 'recfstab /mnt > fstab.preview' also works.")]

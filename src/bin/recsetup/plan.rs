@@ -535,6 +535,22 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                             .collect(),
                     },
                 );
+                // What else only an A/B system gets (the recab desktop app, on a
+                // desktop live medium), from the live medium's A/B-only tree.
+                if Path::new(install_tools::AB_ONLY_TREE).is_dir() {
+                    b.push(
+                        Section::Boot,
+                        "Copy what only an A/B system gets from the live medium (the recab app)",
+                        Action::Host {
+                            argv: vec![
+                                "cp".into(),
+                                "-a".into(),
+                                format!("{}/.", install_tools::AB_ONLY_TREE),
+                                format!("{r}/"),
+                            ],
+                        },
+                    );
+                }
                 b.push(
                     Section::Boot,
                     "Install and enable recab's recab-started service in the A/B system",
