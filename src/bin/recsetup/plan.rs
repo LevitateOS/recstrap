@@ -388,10 +388,15 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
             ));
         }
         // The default set brings the display manager when the software step
-        // runs; a target that already has its desktop must have it now.
-        if target.default_set.is_empty() && !root.has_program("sddm") {
+        // runs; a target that already has its desktop must have it now: the
+        // login screen reclogin, or SDDM on a system not yet switched (the
+        // setup program writes the setting of whichever the target has).
+        if target.default_set.is_empty()
+            && !root.has_program("reclogind")
+            && !root.has_program("sddm")
+        {
             return Err(unavailable(
-                "the target has no SDDM, whose autologin this sets",
+                "the target has no login screen (reclogin or SDDM) whose autologin this sets",
                 "install the default software set (recipe --system --root <target> install ...) first",
             ));
         }
