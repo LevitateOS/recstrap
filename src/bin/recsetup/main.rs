@@ -156,7 +156,7 @@ fn run(command: Commands, json: bool) -> Result<ExitCode> {
         }
         Commands::Apply { root, request, dry_run, passwords_stdin } => {
             let plan = make_plan(&root, request)?;
-            let (result, err) = apply::apply(plan, &ApplyOptions { dry_run, passwords_stdin });
+            let (result, err) = apply::apply(plan, &ApplyOptions { dry_run, passwords_stdin, announce: !json && !dry_run });
             if json {
                 println!("{}", to_json(&result));
             } else {
@@ -168,6 +168,12 @@ fn run(command: Commands, json: bool) -> Result<ExitCode> {
                 print_warnings(&result.warnings);
                 if !dry_run && err.is_none() && !result.steps.is_empty() {
                     println!("\nCompleted {} setup steps.", result.steps.len());
+                }
+                if !dry_run && err.is_some() {
+                    println!(
+                        "\nFAILED: setup stopped at the first failed step above and nothing after it ran. \
+                         Fix the cause and run the same command again; steps already done are kept."
+                    );
                 }
             }
             Ok(match err {

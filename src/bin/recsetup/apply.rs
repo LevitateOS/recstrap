@@ -53,6 +53,9 @@ pub struct ApplyResult {
 pub struct ApplyOptions {
     pub dry_run: bool,
     pub passwords_stdin: bool,
+    /// Print a line to stderr as each step starts, so a long step (copying root A
+    /// to root B) is not silent. Off for `--json`, whose callers read the result.
+    pub announce: bool,
 }
 
 /// Run the plan. On failure the result still lists every step, and the
@@ -108,6 +111,9 @@ pub fn apply(plan: Plan, opts: &ApplyOptions) -> (ApplyResult, Option<Error>) {
         if progress.as_ref().is_some_and(|p|p.done(step)) {
             records.push(record(step,Status::Done,Some((0,"Completed by this installation's earlier attempt".into(),String::new()))));
             continue;
+        }
+        if opts.announce {
+            eprintln!("recsetup: step {}/{}: {} ...", step.index, plan.steps.len(), step.description);
         }
         match run(&plan.root, step, passwords.as_deref()) {
             Ok(out) => {
