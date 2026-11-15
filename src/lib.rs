@@ -14,6 +14,12 @@ pub mod session;
 /// with the recab desktop app on the release medium.
 pub const AB_ONLY_TREE: &str = "/usr/lib/recsetup/ab-only";
 
+/// The tree on the live medium that only a mutable system gets, the mirror
+/// image of [`AB_ONLY_TREE`]: the mutable boot step (`recsetup --boot
+/// mutable`) copies it into the target; an A/B install never gets it. The
+/// builder fills it with the Updater desktop app on the release medium.
+pub const MUTABLE_ONLY_TREE: &str = "/usr/lib/recsetup/mutable-only";
+
 /// The default software set on the release medium: `list` (the group recipes
 /// of the variant's `[desktop].recipes`, one name per line, in install order)
 /// and `recipes/` (those recipes and their deps). recsetup's software step

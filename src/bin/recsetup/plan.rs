@@ -598,6 +598,22 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                 RootMount::of(root.path())?.require("--root-device", device)?;
                 partuuid(device)?;
                 argv.extend(["--root-device".into(), device.display().to_string()]);
+                // What only a mutable system gets (the Updater app, on the
+                // release medium), from the live medium's mutable-only tree.
+                if Path::new(install_tools::MUTABLE_ONLY_TREE).is_dir() {
+                    b.push(
+                        Section::Boot,
+                        "Copy what only a mutable system gets from the live medium (the Updater app)",
+                        Action::Host {
+                            argv: vec![
+                                "cp".into(),
+                                "-a".into(),
+                                format!("{}/.", install_tools::MUTABLE_ONLY_TREE),
+                                format!("{r}/"),
+                            ],
+                        },
+                    );
+                }
             }
         }
         argv.extend(["--kernel".into(), kernel.display().to_string()]);
