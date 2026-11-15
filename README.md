@@ -6,7 +6,7 @@ Extracts LevitateOS EROFS rootfs to a target directory. Like `pacstrap` for Arch
 
 ## Status
 
-**Beta.** Used in E2E tests. 14 safety checks, distinct exit codes.
+**Beta.** Used by the install scenarios. Twelve pre-flight checks, distinct exit codes.
 
 ## Usage
 
@@ -28,12 +28,13 @@ recstrap --json /mnt
 recstrap --check --json /mnt
 ```
 
-The shell setup flow is available without a TUI: `recfstab /mnt` previews mount
+The shell setup flow needs no app: `recfstab /mnt` previews mount
 entries, `recfstab /mnt --write` writes them, and `recsetup inspect --root /mnt`
 describes the extracted system. List setup choices as text with
 `recsetup inspect --root /mnt --list timezones` (also `locales`, `keymaps`,
 `shells`, `groups`, `users`, or `services`). `recsetup plan` previews commands;
-`recsetup apply` runs them. Every tool's `--help` includes usage examples.
+`recsetup apply` runs them and prints a line to stderr as each step starts
+(`recsetup: step 3/12: ...`). Every tool's `--help` includes usage examples.
 
 With `--json`, each stdout line is one event: `start` (the image's entry count and
 size, once it is mounted and counted), `progress` (entries copied, counted from
@@ -45,14 +46,14 @@ its size, the target's free space). A failure prints the shared error document (
 [`src/output.rs`](src/output.rs), with JSON Schemas in `docs/schemas/` written by
 `cargo xtask gen`.
 
-The empty-target check (10) passes a target whose only contents are `lost+found`
+The empty-target check (6) passes a target whose only contents are `lost+found`
 and empty filesystems mounted inside it, so the layout disk-plan (recpart) mounts
 at `/mnt`, `/mnt/boot` and `/mnt/var` counts as empty. A file anywhere on those
 inner filesystems does not.
 
 ## What recstrap Does
 
-1. Validates target directory (15 checks)
+1. Runs the pre-flight checks (below)
 2. Finds rootfs (auto-detect or `--rootfs`)
 3. Mounts EROFS read-only and copies files into target
 4. Verifies extraction
@@ -81,23 +82,20 @@ This is intentional. Manual install like Arch.
 
 | # | Check | Override |
 |---|-------|----------|
-| 1 | Root privileges | No |
-| 2 | EROFS kernel support available | No |
-| 3 | Target exists | No |
-| 4 | Target is directory | No |
-| 5 | Path canonicalized | No |
-| 6 | Not protected path | **Never** |
-| 7 | Target writable | No |
-| 8 | Not on a host system filesystem | `--allow-host-root-fs` (never implied by `--force`) |
-| 9 | Is mount point | `--allow-non-mountpoint` or `--force` |
-| 10 | Target empty | `--allow-nonempty` or `--force` |
-| 11 | Sufficient space (2GB) | No |
-| 12 | Rootfs exists | No |
-| 13 | Rootfs is file | No |
-| 14 | Rootfs readable | No |
-| 15 | Not recursive | No |
+| 1 | Target is not a protected path (checked on the canonical path) | **Never** |
+| 2 | Target is not on a host system filesystem | `--allow-host-root-fs` (never implied by `--force`) |
+| 3 | Running as root | No |
+| 4 | Target writable | No |
+| 5 | Target is a mount point | `--allow-non-mountpoint` or `--force` |
+| 6 | Target empty | `--allow-nonempty` or `--force` |
+| 7 | Enough free space (at least 2 GiB) | No |
+| 8 | Rootfs image found | No |
+| 9 | Rootfs is a file | No |
+| 10 | Rootfs is not inside the target | No |
+| 11 | Rootfs is an EROFS image | No |
+| 12 | The kernel supports EROFS | No |
 
-Check 8 refuses a target on the filesystem the host has mounted at `/` or at
+(A missing or non-directory target is refused before these.) Check 2 refuses a target on the filesystem the host has mounted at `/` or at
 any of the protected paths below that exist (`/home`, `/usr`, `/var`, `/boot`,
 `/tmp`, ...). recstrap finds the mount that holds the target in
 `/proc/self/mountinfo` and compares the filesystems' device numbers, so a
@@ -108,7 +106,7 @@ privilege and runs right after the protected-path check, before the root check.
 ## Protected Paths (Cannot Override)
 
 The host system directories recstrap refuses as a target are `PROTECTED_PATHS`
-in `src/guard.rs`.
+in `target-root/src/lib.rs`, shared with recpart and recab.
 
 ## Error Codes
 

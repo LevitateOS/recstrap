@@ -3,7 +3,9 @@
 Generates fstab entries from mounted filesystems. Like `genfstab` for Arch.
 
 Outputs to stdout. You redirect it yourself, or let `--write` append to
-`<ROOT>/etc/fstab`.
+`<ROOT>/etc/fstab`. Partitions are named by PARTUUID unless you ask otherwise:
+the boot entries name the roots by PARTUUID too, and it survives `recab copy`
+creating the other root's filesystem anew.
 
 ## Status
 
@@ -44,8 +46,9 @@ write. Errors go to stderr as the shared JSON error document.
 ```
 recfstab [OPTIONS] <ROOT>
 
--L, --label      Use LABEL instead of UUID
--p, --partuuid   Use PARTUUID (GPT partition UUID)
+-p, --partuuid   Use PARTUUID (GPT partition UUID); the default
+-U, --uuid       Use the filesystem UUID
+-L, --label      Use the filesystem LABEL
 -t, --partlabel  Use PARTLABEL
 -w, --write      Append the entries to <ROOT>/etc/fstab
     --replace    With --write: replace the fstab's entries for those mount points
@@ -56,17 +59,17 @@ recfstab [OPTIONS] <ROOT>
 
 ```
 # /dev/vda2
-UUID=a1b2c3d4-...    /         ext4    defaults    0    1
+PARTUUID=a1b2c3d4-...    /         ext4    defaults    0    1
 
 # /dev/vda1
-UUID=ABCD-1234       /boot     vfat    defaults    0    2
+PARTUUID=ab12cd34-...    /boot     vfat    defaults    0    2
 ```
 
 ## What It Does
 
-1. Reads `/proc/mounts` for filesystems under `<ROOT>`
-2. Reads `/proc/swaps` for swap (skips zram)
-3. Looks up identifiers via `blkid`
+1. Reads the mount table (`/proc/self/mountinfo`) for filesystems under `<ROOT>`
+2. Reads active swap from `swapon`
+3. Looks up identifiers (`blkid` tags)
 4. Outputs fstab-formatted lines
 
 ## What It Does NOT Do
@@ -78,12 +81,12 @@ UUID=ABCD-1234       /boot     vfat    defaults    0    2
 
 ## Error Codes
 
-Every failure prints an `E0NN` code; the number is also the exit status. The codes are defined once, in [`src/error.rs`](../src/error.rs), and shared by recstrap, recchroot and recfstab.
+Every failure prints an `E0NN` code; the number is also the exit status. The codes are defined once, in [`src/error.rs`](../src/error.rs), and shared by recstrap, recchroot, recfstab and recsetup.
 
 ## Requirements
 
 - Root privileges
-- util-linux (provides `swapon`, `lsblk`, `blkid`); mounts are read from `/proc/self/mountinfo`
+- util-linux (provides `swapon`, `lsblk`, `blkid`); mounts are read from `/proc/self/mountinfo`, swap from `swapon`
 - Filesystems must be mounted
 
 ## Building
