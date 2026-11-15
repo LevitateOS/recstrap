@@ -131,13 +131,27 @@ MIT OR Apache-2.0
 
 ## Recipe and deployment
 
-The system recipes prepare a complete installed filesystem, including safe login
-configuration, default networking, administrator rules and
-`/usr/libexec/recipe-system-setup`. Live autologin, live passwords, shell overrides
+The system recipes prepare the installed base system, including safe login
+configuration, administrator rules, `/usr/libexec/recipe-system-setup` and the
+root effects recipe Recipe runs after system changes. Networking, the desktop
+and everything else above the base are group recipes installed through Recipe
+(recsetup's software step on the release medium). Live autologin, live passwords, shell overrides
 and test helpers are a separate overlay and are never deployed by recstrap.
 
 `recsetup` validates user choices and invokes that target-side setup program for
 timezone, locale, keymap, hostname, accounts, machine identity and services.
+
+On the release medium, which carries the default software set
+(`/usr/lib/recsetup/default-set`: its `list` and `recipes/`) and Recipe's package
+cache (`/usr/share/recipe/cache`), every plan starts with the software step:
+`recipe --system --root <target> --recipes-path /usr/lib/recsetup/default-set/recipes
+install <the list>`, one system change that writes each group recipe into the
+target with a receipt, offline from the cache, then runs the target's root effects
+recipe once. It comes before the accounts (users join the groups the software
+brings) and before the boot step (on A/B both roots get it); a medium without a
+default set installs the base system alone. The desktop's keyboard layout is
+looked up in the target when its step runs (`recsetup x11-keyboard`), after the
+software step brought the keyboard data.
 Both read what the system is from the distro profile in its `/etc/os-release`
 (the `REC_*` fields the builder writes: package backend, init system, libc,
 privilege tool, desktop, kernel line), never by probing for programs; a target
@@ -156,8 +170,8 @@ The initramfs it installs defaults, on both init systems, to the installed
 system's own (`boot/initramfs-installed.img` on the live medium, built by the
 release from the rootfs the ISO installs); the live medium's `boot/initramfs.img`
 is refused (E030), since it only finds the live medium and ignores `root=`.
-Passwords are supplied only at installation. This works offline without shipping
-a compiler image or Ginux build runtime on the live ISO. Storage inspection,
+Passwords are supplied only at installation. This works offline; the
+software step uses the Recipe and Ginux runtime the base system ships. Storage inspection,
 ESP deployment and boot activation remain operations of the install tools and
 recab. recstrap continues to validate and extract the selected image.
 

@@ -5,7 +5,7 @@
 //! a scratch directory are inspected the same way, and nothing here changes
 //! the target.
 
-use distro_profile::{os_release_value, Flavour, InitSystem, Libc, PrivilegeTool, Profile, ADMIN_GROUP};
+use distro_profile::{os_release_value, InitSystem, Libc, PrivilegeTool, Profile, ADMIN_GROUP};
 use install_tools::error::{Code, Error, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -142,10 +142,15 @@ pub struct Target {
     pub os_name: String,
     /// The distro profile from the target's os-release.
     pub profile: Profile,
-    /// Which system it is: the base system, or the desktop system (whose users
-    /// get the desktop session's groups, an X11 keyboard layout and can log in
-    /// by themselves).
-    pub flavour: Flavour,
+    /// The default software set the live medium carries
+    /// (`install_tools::DEFAULT_SET_DIR`), which recsetup's software step
+    /// installs into the target through Recipe; empty on a medium without one
+    /// (the target stays the base system).
+    pub default_set: Vec<String>,
+    /// The system has a desktop, or gets one from the default set: its users
+    /// get the desktop session's groups and an X11 keyboard layout, and can be
+    /// logged in by its display manager by themselves.
+    pub desktop: bool,
     pub admin: Admin,
     /// The time zone database is installed (without it only UTC exists).
     pub has_zoneinfo: bool,
@@ -157,6 +162,17 @@ pub struct Target {
 
 const ZONEINFO: &str = "usr/share/zoneinfo";
 
+/// The default software set this live medium carries: the recipe names in
+/// `install_tools::DEFAULT_SET_DIR/list`, in order; none without that file.
+fn default_set() -> Result<Vec<String>> {
+    let list = Path::new(install_tools::DEFAULT_SET_DIR).join("list");
+    match fs::read_to_string(&list) {
+        Ok(text) => Ok(text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(Error::path_unresolvable(&list.to_string_lossy(), e)),
+    }
+}
+
 pub fn detect(root: &Root) -> Result<Target> {
     let no_profile = |detail: String| {
         Error::new(Code::NoProfile, format!("'{}': {detail}", root.path().display())).fix(
@@ -166,7 +182,6 @@ pub fn detect(root: &Root) -> Result<Target> {
     let os_release = target_root::os_release(root.path())?
         .ok_or_else(|| no_profile("no etc/os-release or usr/lib/os-release".to_string()))?;
     let profile = Profile::from_os_release(&os_release).map_err(|e| no_profile(e.to_string()))?;
-    let flavour = Flavour::from_os_release(&os_release).map_err(|e| no_profile(e.to_string()))?;
     let os_id = os_release_value(&os_release, "ID")
         .unwrap_or_else(|| "linux".to_string())
         .to_ascii_lowercase();
@@ -193,12 +208,23 @@ pub fn detect(root: &Root) -> Result<Target> {
         Err(e) => return Err(Error::path_unresolvable(&boot.to_string_lossy(), e)),
     };
 
+    let default_set = default_set()?;
+    // A desktop session is data (docs/reclogin.md): a session file of an
+    // installed desktop, whichever it is.
+    let has_session = ["usr/share/wayland-sessions", "usr/share/xsessions"]
+        .iter()
+        .map(|dir| root.list(dir))
+        .collect::<Result<Vec<_>>>()?
+        .iter()
+        .flatten()
+        .any(|name| name.ends_with(".desktop"));
     Ok(Target {
         root: root.path().display().to_string(),
         os_id,
         os_name,
         profile,
-        flavour,
+        desktop: has_session || !default_set.is_empty(),
+        default_set,
         admin,
         has_zoneinfo: root.is_dir(ZONEINFO),
         default_shell,

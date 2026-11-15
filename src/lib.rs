@@ -11,5 +11,19 @@ pub mod session;
 /// The tree on the live medium that only an A/B system gets: the A/B boot
 /// step (`recsetup --boot ab`) copies it into the target before root A is
 /// copied to root B; a mutable install never gets it. The builder fills it
-/// with the recab desktop app on a desktop live medium.
+/// with the recab desktop app on the release medium.
 pub const AB_ONLY_TREE: &str = "/usr/lib/recsetup/ab-only";
+
+/// The default software set on the release medium: `list` (the group recipes
+/// of the variant's `[desktop].recipes`, one name per line, in install order)
+/// and `recipes/` (those recipes and their deps). recsetup's software step
+/// installs the list into the target through Recipe with `recipes/` as its
+/// recipes folder; a medium without it (a test ISO) installs the base alone.
+/// It is on the live medium's overlay only, never in an installed system.
+pub const DEFAULT_SET_DIR: &str = "/usr/lib/recsetup/default-set";
+
+/// Recipe's offline package cache (`sha256/<hex>`), which Recipe reads before
+/// the network whenever this directory exists. The release medium's overlay
+/// carries every file the default set pins there; an installed system never
+/// has it.
+pub const RECIPE_CACHE_DIR: &str = "/usr/share/recipe/cache";

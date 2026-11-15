@@ -205,6 +205,20 @@ fn read_passwords(users: &[String]) -> Result<String> {
     Ok(out)
 }
 
+/// Runs `argv` in the target through recchroot, as a plan's chroot step does
+/// (`recsetup x11-keyboard` runs the setup program this way).
+pub fn chroot(root: &Root, argv: Vec<String>) -> Result<()> {
+    let mut session = Session::begin("recsetup")?;
+    session.prepare_chroot(root.path())?;
+    let program = argv[0].clone();
+    let result = exec(session.chroot_command(root.path(), &argv), &program, None);
+    session.close()?;
+    match result {
+        Ok(_) => Ok(()),
+        Err((err, _)) => Err(err),
+    }
+}
+
 fn run(root: &Root, step: &Step, passwords: Option<&str>) -> std::result::Result<Output, (Error, Output)> {
     match &step.action {
         Action::Chroot { argv, passwords: wants } => {

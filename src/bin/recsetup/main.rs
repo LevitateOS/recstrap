@@ -73,6 +73,16 @@ enum Commands {
         #[arg(long)]
         passwords_stdin: bool,
     },
+    /// Set the desktop's keyboard layout to the X11 layout that matches a console keymap,
+    /// looked up in the target now (a plan step: the software step before it brings the data)
+    #[command(name = "x11-keyboard", hide = true)]
+    X11Keyboard {
+        /// The extracted system's root
+        #[arg(long, default_value = "/mnt")]
+        root: PathBuf,
+        /// The console keymap, as `--keymap` names it
+        keymap: String,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -151,6 +161,24 @@ fn run(command: Commands, json: bool) -> Result<ExitCode> {
                 println!("Preview only: no changes made.");
                 print_steps(plan.steps.iter().map(|s| (s, None)));
                 print_warnings(&plan.warnings);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Commands::X11Keyboard { root, keymap } => {
+            let root = open_root(&root, true)?;
+            match target::x11_layout(&root, &keymap)? {
+                Some((layout, variant)) => {
+                    let mut argv = vec![plan::SETUP_PROGRAM.to_string(), "x11-keyboard".to_string(), layout.clone()];
+                    argv.extend(variant.clone());
+                    apply::chroot(&root, argv)?;
+                    match variant {
+                        Some(variant) => println!("recsetup: the desktop's keyboard layout is {layout} ({variant})"),
+                        None => println!("recsetup: the desktop's keyboard layout is {layout}"),
+                    }
+                }
+                None => println!(
+                    "recsetup: no X11 keyboard layout matches the keymap '{keymap}'; the desktop keeps its default (us)"
+                ),
             }
             Ok(ExitCode::SUCCESS)
         }

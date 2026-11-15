@@ -10,12 +10,12 @@ use recinit::live::{
     INITRAMFS_INSTALLED_ISO_PATH, INITRAMFS_LIVE_ISO_PATH, KERNEL_ISO_PATH, LIVE_MEDIA_DIR,
 };
 use recpart::types::InstallMode;
-use distro_profile::{Flavour, DESKTOP_SESSION_GROUPS};
+use distro_profile::DESKTOP_SESSION_GROUPS;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 pub const PLAN_SCHEMA_VERSION: u32 = 1;
-const SETUP_PROGRAM: &str = "/usr/libexec/recipe-system-setup";
+pub const SETUP_PROGRAM: &str = "/usr/libexec/recipe-system-setup";
 /// Where the live medium carries recab; the A/B boot step installs it at the
 /// same path in the target.
 const LIVE_RECAB: &str = "/usr/bin/recab";
@@ -23,6 +23,8 @@ const LIVE_RECAB: &str = "/usr/bin/recab";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Section {
+    /// The default software set, installed through Recipe.
+    Software,
     Timezone,
     Locale,
     Keymap,
@@ -159,6 +161,27 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
             ],
         },
     );
+    // The software step: the default set the live medium carries, installed
+    // into the target through Recipe before anything is personalized, so the
+    // users made below join the groups its packages bring, and the keyboard
+    // and login steps find its display server and display manager. One
+    // system change: Recipe writes every group with a receipt, then runs the
+    // target's effects recipe (/usr/lib/recipe/effects.rhai) once, at the end.
+    // On A/B it lands in root A before the boot step copies root A to root B.
+    if !target.default_set.is_empty() {
+        let recipes = format!("{}/recipes", install_tools::DEFAULT_SET_DIR);
+        let mut argv: Vec<String> =
+            ["recipe", "--system", "--root", &r, "--recipes-path", &recipes, "install"].iter().map(|s| s.to_string()).collect();
+        argv.extend(target.default_set.iter().cloned());
+        b.push(
+            Section::Software,
+            format!(
+                "Install the default software set through Recipe ({} recipes), offline from this medium",
+                target.default_set.len()
+            ),
+            Action::Host { argv },
+        );
+    }
     let machine_id = request.machine_id || request.boot.as_ref().is_some_and(|b| b.mode==InstallMode::Ab);
     let personalization = request.timezone.is_some()
         || request.locale.is_some()
@@ -219,25 +242,18 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
             format!("Set the console keymap to {keymap}"),
             &["keymap", keymap],
         );
-        // A desktop system's display server, login screen and session take
-        // the X11 layout of the same keyboard.
-        if target.flavour == Flavour::Desktop {
-            match target::x11_layout(&root, keymap)? {
-                Some((layout, variant)) => {
-                    let shown = match &variant {
-                        Some(variant) => format!("{layout} ({variant})"),
-                        None => layout.clone(),
-                    };
-                    let mut args = vec!["x11-keyboard", layout.as_str()];
-                    if let Some(variant) = &variant {
-                        args.push(variant);
-                    }
-                    b.setup(Section::Keymap, format!("Set the desktop's keyboard layout to {shown}"), &args);
-                }
-                None => warnings.push(format!(
-                    "no X11 keyboard layout matches the keymap '{keymap}'; the desktop keeps its default (us)"
-                )),
-            }
+        // A desktop's display server, login screen and session take the X11
+        // layout of the same keyboard. The layout is looked up in the target
+        // when the step runs (`recsetup x11-keyboard`): the software step
+        // before it brings the keyboard data.
+        if target.desktop {
+            b.push(
+                Section::Keymap,
+                format!("Set the desktop's keyboard layout to the one matching {keymap}"),
+                Action::Host {
+                    argv: ["recsetup", "x11-keyboard", "--root", &r, keymap.as_str()].iter().map(|s| s.to_string()).collect(),
+                },
+            );
         }
     }
     if let Some(hostname) = &request.hostname {
@@ -302,14 +318,13 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                 }
             }
             // A desktop session uses the devices and services these groups
-            // own; the user joins those the system has.
-            if target.flavour == Flavour::Desktop {
-                for g in DESKTOP_SESSION_GROUPS {
-                    if groups.iter().any(|existing| existing == g) && !user_groups.iter().any(|have| have == g) {
-                        user_groups.push(g.to_string());
-                    }
-                }
-            }
+            // own; the user joins those the system has when the step runs (the
+            // software step before it makes the groups its packages need).
+            let session_groups: Vec<&str> = if target.desktop {
+                DESKTOP_SESSION_GROUPS.iter().copied().filter(|g| !user_groups.iter().any(|have| have == g)).collect()
+            } else {
+                Vec::new()
+            };
             for g in &user_groups {
                 if !groups.contains(g) {
                     return Err(unavailable(
@@ -328,11 +343,14 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                 ));
                 continue;
             }
-            b.setup(
-                Section::Users,
-                format!("Create user {}", user.name),
-                &["user", &user.name, &shell, &user_groups.join(",")],
-            );
+            let session_groups = session_groups.join(",");
+            let mut args = vec!["user", user.name.as_str(), shell.as_str()];
+            let joined = user_groups.join(",");
+            args.push(&joined);
+            if !session_groups.is_empty() {
+                args.push(&session_groups);
+            }
+            b.setup(Section::Users, format!("Create user {}", user.name), &args);
         }
     }
     if !password_users.is_empty() {
@@ -356,10 +374,10 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
     }
 
     if let Some(user) = &request.autologin {
-        if target.flavour != Flavour::Desktop {
+        if !target.desktop {
             return Err(unavailable(
-                "only a desktop system logs a user in by itself",
-                "leave --autologin out on the base system",
+                "only a system with a desktop logs a user in by itself",
+                "leave --autologin out on the base system, or install from the release medium, which installs the default software set",
             ));
         }
         let created = request.users.iter().any(|u| &u.name == user);
@@ -369,10 +387,12 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                 "name a user the request creates (--user) or one the system has, not root",
             ));
         }
-        if !root.has_program("sddm") {
+        // The default set brings the display manager when the software step
+        // runs; a target that already has its desktop must have it now.
+        if target.default_set.is_empty() && !root.has_program("sddm") {
             return Err(unavailable(
                 "the target has no SDDM, whose autologin this sets",
-                "deploy the desktop system produced by its current system recipe",
+                "install the default software set (recipe --system --root <target> install ...) first",
             ));
         }
         let session = target.profile.desktop.session();
@@ -535,8 +555,8 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                             .collect(),
                     },
                 );
-                // What else only an A/B system gets (the recab desktop app, on a
-                // desktop live medium), from the live medium's A/B-only tree.
+                // What else only an A/B system gets (the recab desktop app, on
+                // the release medium), from the live medium's A/B-only tree.
                 if Path::new(install_tools::AB_ONLY_TREE).is_dir() {
                     b.push(
                         Section::Boot,
