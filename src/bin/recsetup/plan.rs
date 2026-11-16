@@ -529,7 +529,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                 };
                 if a == b_dev {
                     return Err(invalid(
-                        "slot A and slot B are the same device",
+                        "root A and root B are the same device",
                         "pass two different partitions",
                     ));
                 }
@@ -539,7 +539,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
                     return Err(Error::new(
                         Code::BootDeviceMismatch,
                         format!(
-                            "--slot-b '{}' is the partition mounted at '{r}'; that is slot A",
+                            "--slot-b '{}' is the partition mounted at '{r}'; that is root A",
                             b_dev.display()
                         ),
                     )

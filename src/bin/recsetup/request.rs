@@ -71,7 +71,7 @@ pub use recpart::types::InstallMode as BootMode;
 #[serde(deny_unknown_fields)]
 pub struct BootRequest {
     pub mode: BootMode,
-    /// A/B: slot A's partition (the installed system) and slot B's.
+    /// A/B: root A's partition (the installed system) and root B's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_a: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,10 +124,10 @@ pub struct RequestFlags {
     /// Install systemd-boot and write the boot entries for this layout
     #[arg(long, value_enum)]
     pub boot: Option<BootMode>,
-    /// A/B slot A partition
+    /// A/B root A partition
     #[arg(long, value_name = "DEVICE")]
     pub slot_a: Option<PathBuf>,
-    /// A/B slot B partition
+    /// A/B root B partition
     #[arg(long, value_name = "DEVICE")]
     pub slot_b: Option<PathBuf>,
     /// Mutable root partition
