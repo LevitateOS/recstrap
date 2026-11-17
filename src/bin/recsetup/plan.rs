@@ -12,6 +12,7 @@ use recinit::live::{
 use recpart::types::InstallMode;
 use distro_profile::DESKTOP_SESSION_GROUPS;
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 pub const PLAN_SCHEMA_VERSION: u32 = 1;
@@ -47,6 +48,9 @@ pub enum Action {
     Chroot { argv: Vec<String>, passwords: bool },
     /// Run on the live system.
     Host { argv: Vec<String> },
+    /// Run on the live system with `env` set, then delete the folder
+    /// `scratch` whether the command succeeded or failed.
+    HostScratch { argv: Vec<String>, env: Vec<(String, String)>, scratch: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,6 +72,8 @@ pub struct Plan {
     pub steps: Vec<Step>,
     /// Things that do not stop the plan but are worth a look first.
     pub warnings: Vec<String>,
+    /// Steps left out because the target already has what they do.
+    pub notes: Vec<String>,
     /// The accounts whose passwords apply reads from stdin, in order.
     pub password_users: Vec<String>,
     #[serde(skip)]
@@ -109,6 +115,10 @@ impl Builder<'_> {
                 shell_line(argv)
             ),
             Action::Host { argv } => shell_line(argv),
+            Action::HostScratch { argv, env, scratch } => {
+                let env: String = env.iter().map(|(k, v)| format!("{k}={} ", shell_quote(v))).collect();
+                format!("{env}{}; rm -rf {}", shell_line(argv), shell_quote(scratch))
+            }
         };
         self.steps.push(Step {
             index: self.steps.len() + 1,
@@ -143,6 +153,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         steps: Vec::new(),
     };
     let mut warnings = Vec::new();
+    let mut notes = Vec::new();
     let r = root.path().display().to_string();
     let inspect_hint =
         |what: &str| format!("choose one that `recsetup inspect --root {r}` lists under {what}");
@@ -168,18 +179,51 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
     // system change: Recipe writes every group with a receipt, then runs the
     // target's effects recipe (/usr/lib/recipe/effects.rhai) once, at the end.
     // On A/B it lands in root A before the boot step copies root A to root B.
-    if !target.default_set.is_empty() {
+    let missing: Vec<&String> = match installed_names(&r) {
+        Some(held) => target.default_set.iter().filter(|name| !held.contains(*name)).collect(),
+        None => target.default_set.iter().collect(),
+    };
+    if !target.default_set.is_empty() && missing.is_empty() {
+        notes.push(format!(
+            "The default software set ({} recipes) is already installed in the target; its step is not run again",
+            target.default_set.len()
+        ));
+    } else if !target.default_set.is_empty() {
         let recipes = format!("{}/recipes", install_tools::DEFAULT_SET_DIR);
-        let mut argv: Vec<String> =
-            ["recipe", "--system", "--root", &r, "--recipes-path", &recipes, "install"].iter().map(|s| s.to_string()).collect();
+        // The live medium's /var and home are in memory, too small for the
+        // desktop set: scratch, producer state, logs and published outputs go
+        // to the target disk (/var is mounted under the target by now, on A/B
+        // too: the step above writes /var/home into it), and nothing is kept.
+        let scratch = format!("{r}/var/tmp/recipe-install");
+        let mut argv: Vec<String> = [
+            "recipe",
+            "--system",
+            "--root",
+            &r,
+            "--recipes-path",
+            &recipes,
+            "--state-dir",
+            &format!("{scratch}/state"),
+            "--build-dir",
+            &format!("{scratch}/build"),
+            "--no-persist-state",
+            "install",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         argv.extend(target.default_set.iter().cloned());
         b.push(
             Section::Software,
             format!(
-                "Install the default software set through Recipe ({} recipes), offline from this medium",
+                "Install the default software set through Recipe ({} recipes), offline from this medium, working in {scratch}",
                 target.default_set.len()
             ),
-            Action::Host { argv },
+            Action::HostScratch {
+                argv,
+                env: vec![("RECIPE_SCRATCH_DIR".to_string(), scratch.clone())],
+                scratch,
+            },
         );
     }
     let machine_id = request.machine_id || request.boot.as_ref().is_some_and(|b| b.mode==InstallMode::Ab);
@@ -638,9 +682,34 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         request,
         steps,
         warnings,
+        notes,
         password_users,
         root,
     })
+}
+
+/// The recipe names the target's Recipe receipt holds, asked of Recipe with
+/// its read-only `installed --json`; `None` when Recipe cannot say (the
+/// software step then runs, and Recipe skips what it finds present).
+fn installed_names(root: &str) -> Option<BTreeSet<String>> {
+    let out = std::process::Command::new("recipe")
+        .args(["--system", "--root", root, "installed", "--json"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    Some(
+        value
+            .get("packages")?
+            .as_array()?
+            .iter()
+            .filter_map(|p| p.get("name")?.as_str().map(str::to_string))
+            .collect(),
+    )
 }
 
 /// The partition's PARTUUID, which names the root in the boot entry.

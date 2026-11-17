@@ -46,6 +46,8 @@ pub struct ApplyResult {
     pub target: Target,
     pub steps: Vec<StepRecord>,
     pub warnings: Vec<String>,
+    /// Steps left out because the target already has what they do.
+    pub notes: Vec<String>,
     /// The failure that stopped apply; `None` when every step ran.
     pub error: Option<ErrorPayload>,
 }
@@ -152,6 +154,7 @@ fn result(plan: &Plan, opts: &ApplyOptions, warnings: Vec<String>, steps: Vec<St
         target: plan.target.clone(),
         steps,
         warnings,
+        notes: plan.notes.clone(),
         error: err.map(ErrorPayload::of),
     }
 }
@@ -241,6 +244,23 @@ fn run(root: &Root, step: &Step, passwords: Option<&str>) -> std::result::Result
             let mut command = Command::new(&argv[0]);
             command.args(&argv[1..]);
             exec(command, &argv[0], None)
+        }
+        Action::HostScratch { argv, env, scratch } => {
+            let mut command = Command::new(&argv[0]);
+            command.args(&argv[1..]).envs(env.iter().map(|(k, v)| (k, v)));
+            let made = std::fs::create_dir_all(scratch)
+                .map_err(|e| (Error::path_unresolvable(scratch, e), None));
+            let result = match made {
+                Ok(()) => exec(command, &argv[0], None),
+                Err(failed) => Err(failed),
+            };
+            // Gone whether the command succeeded or failed.
+            if let Err(e) = std::fs::remove_dir_all(scratch) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("recsetup: could not delete {scratch}: {e}; the folder can be deleted");
+                }
+            }
+            result
         }
     }
 }

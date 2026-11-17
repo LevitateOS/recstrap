@@ -160,6 +160,7 @@ fn run(command: Commands, json: bool) -> Result<ExitCode> {
                 print_target(&plan.target);
                 println!("Preview only: no changes made.");
                 print_steps(plan.steps.iter().map(|s| (s, None)));
+                print_notes(&plan.notes);
                 print_warnings(&plan.warnings);
             }
             Ok(ExitCode::SUCCESS)
@@ -193,6 +194,7 @@ fn run(command: Commands, json: bool) -> Result<ExitCode> {
                     println!("Dry run: no changes made.");
                 }
                 print_steps(result.steps.iter().map(|r| (&r.step, Some(r))));
+                print_notes(&result.notes);
                 print_warnings(&result.warnings);
                 if !dry_run && err.is_none() && !result.steps.is_empty() {
                     println!("\nCompleted {} setup steps.", result.steps.len());
@@ -274,6 +276,12 @@ fn print_steps<'a>(steps: impl Iterator<Item = (&'a plan::Step, Option<&'a apply
     }
     if !any {
         println!("\nNothing to do: the request asks for nothing.");
+    }
+}
+
+fn print_notes(notes: &[String]) {
+    for n in notes {
+        println!("\nNote: {n}.");
     }
 }
 
