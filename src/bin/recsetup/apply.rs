@@ -246,10 +246,23 @@ fn run(root: &Root, step: &Step, passwords: Option<&str>) -> std::result::Result
             exec(command, &argv[0], None)
         }
         Action::HostScratch { argv, env, scratch } => {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
             let mut command = Command::new(&argv[0]);
             command.args(&argv[1..]).envs(env.iter().map(|(k, v)| (k, v)));
-            let made = std::fs::create_dir_all(scratch)
-                .map_err(|e| (Error::path_unresolvable(scratch, e), None));
+            // Recipe requires its scratch pool to be private (0700).
+            let made = (|| -> std::io::Result<()> {
+                if let Some(parent) = std::path::Path::new(scratch).parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                match std::fs::DirBuilder::new().mode(0o700).create(scratch) {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        std::fs::set_permissions(scratch, std::fs::Permissions::from_mode(0o700))
+                    }
+                    Err(e) => Err(e),
+                }
+            })()
+            .map_err(|e| (Error::path_unresolvable(scratch, e), None));
             let result = match made {
                 Ok(()) => exec(command, &argv[0], None),
                 Err(failed) => Err(failed),
