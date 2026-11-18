@@ -36,3 +36,8 @@ pub const DEFAULT_SET_DIR: &str = "/usr/lib/recsetup/default-set";
 /// keep them equal) and recsetup's software step does so on the target disk.
 /// An installed system never has it.
 pub const RECIPE_CACHE_DIR: &str = "/usr/share/recipe/cache";
+
+/// Where recsetup's software step keeps the fetched package parts, relative to the
+/// target root: the parts' download folder and the unpacked package cache, on the target
+/// disk. The step removes the folder when it ends; the install scenario checks that.
+pub const FETCHED_PARTS_DIR: &str = "/var/tmp/recipe-parts";

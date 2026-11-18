@@ -206,7 +206,7 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         // are fetched first (`recupdate fetch-parts`, from the network or from
         // `--parts-from`). The live medium's memory cannot hold them, so their download folder
         // and the unpacked package cache are on the target disk, removed after the install.
-        let parts = format!("{r}/var/tmp/recipe-parts");
+        let parts = format!("{r}{}", install_tools::FETCHED_PARTS_DIR);
         let mut fetch: Vec<String> = vec!["recupdate".into(), "fetch-parts".into()];
         if let Some(dir) = &request.parts_from {
             fetch.push("--from".into());
