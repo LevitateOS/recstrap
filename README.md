@@ -142,12 +142,27 @@ and test helpers are a separate overlay and are never deployed by recstrap.
 timezone, locale, keymap, hostname, accounts, machine identity and services.
 
 On the release medium, which carries the default software set
-(`/usr/lib/recsetup/default-set`: its `list` and `recipes/`) and Recipe's package
-cache (`/usr/share/recipe/cache`), every plan starts with the software step:
-`recipe --system --root <target> --recipes-path /usr/lib/recsetup/default-set/recipes
-install <the list>`, one system change that writes each group recipe into the
-target with a receipt, offline from the cache, then runs the target's root effects
-recipe once. It comes before the accounts (users join the groups the software
+(`/usr/lib/recsetup/default-set`: its `list` and `recipes/`) but **no package
+cache**, every plan starts with the software step, in three commands:
+
+1. `recupdate fetch-parts` (with `RECUPDATE_CACHE_DIR` and `RECUPDATE_RECIPE_CACHE_DIR`
+   under `<target>/var/tmp/recipe-parts`, because the live medium's memory cannot hold
+   the downloads): downloads the category parts of the release the medium was built
+   from, verifies them against the signed manifest and unpacks them into a package
+   cache on the target disk. `--parts-from DIR` (a flag of `plan` and `apply`, not part
+   of the request file) reads `release.json`, `release.json.sig` and the
+   `parts-*.tar.zst` files from a folder instead of the network. When it fails, the
+   step's error lists the parts still missing with their sizes (`fetch-parts --list`)
+   and the way forward: connect the network (NetworkManager runs in the live session)
+   or give the folder with `--parts-from DIR`, then run the same command again; fetched
+   parts are kept.
+2. `recipe --system --root <target> --recipes-path /usr/lib/recsetup/default-set/recipes
+   install <the list>` with `RECIPE_CACHE_DIR` set to that cache: one system change that
+   writes each group recipe into the target with a receipt, offline, then runs the
+   target's root effects recipe once.
+3. `rm -rf <target>/var/tmp/recipe-parts`: the installed system never keeps the cache.
+
+The software step comes before the accounts (users join the groups the software
 brings) and before the boot step (on A/B both roots get it); a medium without a
 default set installs the base system alone. The desktop's keyboard layout is
 looked up in the target when its step runs (`recsetup x11-keyboard`), after the
@@ -170,8 +185,7 @@ The initramfs it installs defaults, on both init systems, to the installed
 system's own (`boot/initramfs-installed.img` on the live medium, built by the
 release from the rootfs the ISO installs); the live medium's `boot/initramfs.img`
 is refused (E030), since it only finds the live medium and ignores `root=`.
-Passwords are supplied only at installation. This works offline; the
-software step uses the Recipe and Ginux runtime the base system ships. Storage inspection,
+Passwords are supplied only at installation. The software step needs the network (or `--parts-from`) for the parts; it uses the Recipe and Ginux runtime the base system ships. Storage inspection,
 ESP deployment and boot activation remain operations of the install tools and
 recab. recstrap continues to validate and extract the selected image.
 

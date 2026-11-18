@@ -51,6 +51,9 @@ pub enum Action {
     /// Run on the live system with `env` set, then delete the folder
     /// `scratch` whether the command succeeded or failed.
     HostScratch { argv: Vec<String>, env: Vec<(String, String)>, scratch: String },
+    /// Run `recupdate fetch-parts` on the live system with `env` set. When it fails, the
+    /// step's error lists the parts still missing and the way forward.
+    FetchParts { argv: Vec<String>, env: Vec<(String, String)> },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -118,6 +121,10 @@ impl Builder<'_> {
             Action::HostScratch { argv, env, scratch } => {
                 let env: String = env.iter().map(|(k, v)| format!("{k}={} ", shell_quote(v))).collect();
                 format!("{env}{}; rm -rf {}", shell_line(argv), shell_quote(scratch))
+            }
+            Action::FetchParts { argv, env } => {
+                let env: String = env.iter().map(|(k, v)| format!("{k}={} ", shell_quote(v))).collect();
+                format!("{env}{}", shell_line(argv))
             }
         };
         self.steps.push(Step {
@@ -195,6 +202,27 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         // to the target disk (/var is mounted under the target by now, on A/B
         // too: the step above writes /var/home into it), and nothing is kept.
         let scratch = format!("{r}/var/tmp/recipe-install");
+        // The release medium carries no package cache: the parts of the default set's downloads
+        // are fetched first (`recupdate fetch-parts`, from the network or from
+        // `--parts-from`). The live medium's memory cannot hold them, so their download folder
+        // and the unpacked package cache are on the target disk, removed after the install.
+        let parts = format!("{r}/var/tmp/recipe-parts");
+        let mut fetch: Vec<String> = vec!["recupdate".into(), "fetch-parts".into()];
+        if let Some(dir) = &request.parts_from {
+            fetch.push("--from".into());
+            fetch.push(dir.to_string_lossy().into_owned());
+        }
+        b.push(
+            Section::Software,
+            "Fetch the default software set's package parts (from the network, or the folder given with --parts-from) into the target disk",
+            Action::FetchParts {
+                argv: fetch,
+                env: vec![
+                    ("RECUPDATE_CACHE_DIR".to_string(), format!("{parts}/download")),
+                    ("RECUPDATE_RECIPE_CACHE_DIR".to_string(), format!("{parts}/cache")),
+                ],
+            },
+        );
         let mut argv: Vec<String> = [
             "recipe",
             "--system",
@@ -216,14 +244,22 @@ pub fn build(root: Root, target: Target, request: SetupRequest) -> Result<Plan> 
         b.push(
             Section::Software,
             format!(
-                "Install the default software set through Recipe ({} recipes), offline from this medium, working in {scratch}",
+                "Install the default software set through Recipe ({} recipes), from the fetched package parts, working in {scratch}",
                 target.default_set.len()
             ),
             Action::HostScratch {
                 argv,
-                env: vec![("RECIPE_SCRATCH_DIR".to_string(), scratch.clone())],
+                env: vec![
+                    ("RECIPE_SCRATCH_DIR".to_string(), scratch.clone()),
+                    ("RECIPE_CACHE_DIR".to_string(), format!("{parts}/cache")),
+                ],
                 scratch,
             },
+        );
+        b.push(
+            Section::Software,
+            "Remove the fetched package parts from the target disk",
+            Action::Host { argv: vec!["rm".into(), "-rf".into(), "--one-file-system".into(), parts] },
         );
     }
     let machine_id = request.machine_id || request.boot.as_ref().is_some_and(|b| b.mode==InstallMode::Ab);

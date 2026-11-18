@@ -245,6 +245,7 @@ fn run(root: &Root, step: &Step, passwords: Option<&str>) -> std::result::Result
             command.args(&argv[1..]);
             exec(command, &argv[0], None)
         }
+        Action::FetchParts { argv, env } => fetch_parts(argv, env),
         Action::HostScratch { argv, env, scratch } => {
             use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
             let mut command = Command::new(&argv[0]);
@@ -275,6 +276,76 @@ fn run(root: &Root, step: &Step, passwords: Option<&str>) -> std::result::Result
             }
             result
         }
+    }
+}
+
+/// `recupdate fetch-parts`. On failure it asks `fetch-parts --list` which parts are still
+/// missing, and the error says so with the way forward (the network, or `--parts-from`).
+fn fetch_parts(argv: &[String], env: &[(String, String)]) -> std::result::Result<Output, (Error, Output)> {
+    let command = |list: bool| {
+        let mut command = Command::new(&argv[0]);
+        command.arg(&argv[1]);
+        if list {
+            command.arg("--list");
+        }
+        command.args(&argv[2..]).envs(env.iter().map(|(k, v)| (k, v)));
+        command
+    };
+    // recupdate's last stderr line is its reason (`recupdate: <reason>`).
+    let reason_of = |stderr: &str| {
+        stderr
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .map(|l| l.trim().trim_start_matches("recupdate: ").to_string())
+    };
+    let (err, out) = match exec(command(false), &argv[0], None) {
+        Ok(out) => return Ok(out),
+        Err(failed) => failed,
+    };
+    let reason = out
+        .as_ref()
+        .and_then(|(_, _, stderr)| reason_of(stderr))
+        .unwrap_or_else(|| err.message.clone());
+    let missing = match command(true).output() {
+        Ok(o) if o.status.success() => missing_parts(&String::from_utf8_lossy(&o.stdout)),
+        Ok(o) => Err(reason_of(&String::from_utf8_lossy(&o.stderr)).unwrap_or_else(|| "it failed".into())),
+        Err(e) => Err(e.to_string()),
+    };
+    let mut text = match missing {
+        Ok(list) if !list.is_empty() => format!("Parts still to fetch: {}.", list.join(", ")),
+        Ok(_) => "Every part is fetched already.".to_string(),
+        Err(why) => format!("The list of parts could not be read either: {why}."),
+    };
+    text.push_str(
+        " Way forward: connect this live session to the network (NetworkManager is running; use the \
+         network icon in the panel or nmtui), or give the folder that holds the release's parts \
+         (release.json, release.json.sig and the parts-*.tar.zst files) with --parts-from DIR, then run \
+         the same command again. Parts already fetched are kept.",
+    );
+    let error = Error::tool_failed(&argv[0], &reason).fix(text.clone());
+    let (code, stdout, _) = out.unwrap_or((-1, String::new(), String::new()));
+    Err((error, Some((code, stdout, format!("{reason}\n{text}\n")))))
+}
+
+/// The parts `fetch-parts --list` reports as not present, as `name (size)`.
+fn missing_parts(listing: &str) -> std::result::Result<Vec<String>, String> {
+    let value: serde_json::Value = serde_json::from_str(listing).map_err(|e| format!("its list is not JSON ({e})"))?;
+    let parts = value["parts"].as_array().ok_or("its list has no parts array")?;
+    Ok(parts
+        .iter()
+        .filter(|p| p["present"] != true)
+        .map(|p| format!("{} ({})", p["name"].as_str().unwrap_or("?"), human_size(p["size"].as_u64().unwrap_or(0))))
+        .collect())
+}
+
+fn human_size(bytes: u64) -> String {
+    const MIB: f64 = 1024.0 * 1024.0;
+    let mib = bytes as f64 / MIB;
+    if mib >= 1024.0 {
+        format!("{:.1} GiB", mib / 1024.0)
+    } else {
+        format!("{:.0} MiB", mib)
     }
 }
 

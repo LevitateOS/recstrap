@@ -40,6 +40,10 @@ pub struct SetupRequest {
     /// Services to start at boot, by bare name as `inspect` lists them (`sshd`).
     #[serde(default)]
     pub services: Vec<String>,
+    /// A folder holding the release's parts (`--parts-from`), read by the software step
+    /// instead of the network. Not part of the request file or of the saved progress.
+    #[serde(skip)]
+    pub parts_from: Option<PathBuf>,
 }
 
 fn yes() -> bool {
@@ -151,6 +155,10 @@ pub struct RequestFlags {
     /// Service to start at boot, by bare name (repeatable)
     #[arg(long = "service", value_name = "NAME")]
     pub services: Vec<String>,
+    /// Read the release's package parts from this folder instead of downloading them (the
+    /// software step runs `recupdate fetch-parts --from DIR`)
+    #[arg(long, value_name = "DIR")]
+    pub parts_from: Option<PathBuf>,
 }
 
 impl RequestFlags {
@@ -184,6 +192,9 @@ impl RequestFlags {
             request.users.push(UserRequest { name, groups: Vec::new(), shell: None, admin: true, password: true });
         }
         request.services.extend(self.services);
+        if self.parts_from.is_some() {
+            request.parts_from = self.parts_from;
+        }
 
         if let Some(mode) = self.boot {
             match &mut request.boot {

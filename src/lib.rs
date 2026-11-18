@@ -29,7 +29,10 @@ pub const MUTABLE_ONLY_TREE: &str = "/usr/lib/recsetup/mutable-only";
 pub const DEFAULT_SET_DIR: &str = "/usr/lib/recsetup/default-set";
 
 /// Recipe's offline package cache (`sha256/<hex>`), which Recipe reads before
-/// the network whenever this directory exists. The release medium's overlay
-/// carries every file the default set pins there; an installed system never
-/// has it.
+/// the network whenever this directory exists. The release medium no longer
+/// carries the files the default set pins: `recupdate fetch-parts` unpacks the
+/// release's category parts into this folder (its default is a literal copy of
+/// this constant, `DEFAULT_RECIPE_CACHE_DIR` in tools/recupdate/src/parts.rs;
+/// keep them equal) and recsetup's software step does so on the target disk.
+/// An installed system never has it.
 pub const RECIPE_CACHE_DIR: &str = "/usr/share/recipe/cache";
